@@ -32,6 +32,7 @@ import {
 import { FileSearch } from "./FileSearch";
 import { ComposerBox, type ComposerBoxHandle } from "./ComposerBox";
 import { Icon } from "./icons/Icon";
+import { Spinner } from "./conversation/icons";
 import { MentionMenu, mentionQuery, mentionResults, useMentionSearch } from "./MentionMenu";
 import { hasOtherChats, mentionInsert, mentionItems, mentionSelection, type MentionItem } from "./mentionItems";
 import type { ContextMenuItem } from "../../ui/ContextMenu";
@@ -113,6 +114,7 @@ export const COMPOSER_LABELS = {
   prompt: "composer.prompt",
   send: "composer.send",
   stop: "composer.stop",
+  stopping: "composer.stopping",
   escapeAgainToStop: "composer.escapeAgainToStop",
   commands: "composer.commands",
   noCommands: "composer.noCommands",
@@ -1272,7 +1274,9 @@ export function Composer({
     composing.current = value;
   };
 
-  const stop = !shell && snapshot.isWorking && !text.trim();
+  // Stop was sent and the turn has not ended: Stop turns and says so.
+  const stopping = !shell && snapshot.isWorking && snapshot.stopping === true;
+  const stop = !shell && snapshot.isWorking && !stopping && !text.trim();
   // Stop shows for the whole turn, a typed prompt or not; Esc stops only from an empty prompt.
   const running = !shell && snapshot.isWorking;
   const hasDraft = Boolean(text.trim() || attachments.length || pending.length);
@@ -1301,10 +1305,13 @@ export function Composer({
   // Mid-turn it teaches both keys, as Claude's composer does: Return steers and ⌘Return queues.
   // The Quick Composer's ⌘Return opens the window, so there it names Return alone; an agent that
   // cannot steer says it queues.
-  // While the double press is armed, the placeholder says to press Esc again, as Stop's hint does.
-  const placeholderKey = escapeStop.armed
-    ? COMPOSER_LABELS.escapeAgainToStop
-    : !queues
+  // While the double press is armed, the placeholder says to press Esc again, as Stop's hint does;
+  // once Stop is sent, it says the turn is stopping until it ends.
+  const placeholderKey = stopping
+    ? COMPOSER_LABELS.stopping
+    : escapeStop.armed
+      ? COMPOSER_LABELS.escapeAgainToStop
+      : !queues
       ? COMPOSER_LABELS.placeholder
       : !steers
         ? COMPOSER_LABELS.placeholderQueued
@@ -1510,20 +1517,30 @@ export function Composer({
   ) : null;
   // Stop, for the whole turn. Claude desktop's box (Leo 2026-10-20) draws it left of the mic, the
   // mic keeping the right edge; the other look keeps it at the cluster's end.
+  // Once sent, Stop turns until the turn ends, so a press (or Esc) is seen to take (Leo 2026-10-21:
+  // "IDK IF IM ACTUALLY STOPPING YOU"); pressed again it sends Stop again.
+  const stopLabel = t(
+    stopping
+      ? COMPOSER_LABELS.stopping
+      : escapeStop.armed
+        ? COMPOSER_LABELS.escapeAgainToStop
+        : COMPOSER_LABELS.stop,
+  );
   const stopButton = running ? (
     <button
       key="stop"
       ref={sendButton}
       type="button"
       className="acpmux-send acpmux-cancel"
-      data-escape-armed={escapeStop.armed ? "" : undefined}
-      aria-label={t(escapeStop.armed ? COMPOSER_LABELS.escapeAgainToStop : COMPOSER_LABELS.stop)}
-      // tooltip-allow: names the icon-only Stop, and once armed says to press Esc again.
-      title={t(escapeStop.armed ? COMPOSER_LABELS.escapeAgainToStop : COMPOSER_LABELS.stop)}
+      data-escape-armed={escapeStop.armed && !stopping ? "" : undefined}
+      data-stopping={stopping ? "" : undefined}
+      aria-label={stopLabel}
+      // tooltip-allow: names the icon-only Stop, once armed says to press Esc again, and once sent says it is stopping.
+      title={stopLabel}
       onClick={stopTurn}
     >
       {/* The first Esc of the double press keeps the glyph; its color and name say Esc again stops. */}
-      <StopIcon />
+      {stopping ? <Spinner loading size={14} /> : <StopIcon />}
     </button>
   ) : null;
   // Why a failed turn paused the queue: the paused note names it (queuePause.ts).

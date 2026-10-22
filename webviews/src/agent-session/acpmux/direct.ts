@@ -3709,6 +3709,11 @@ export class AcpmuxDirectClient {
       this.asks.sessions(this.sessions);
     }
     const summary = this.summary;
+    const working =
+      this.replayThrough === undefined &&
+      !this.stopGaveUp &&
+      // acpmux may still list a paused queue as running after its turn failed.
+      (this.turnOpen || (summary?.status === "running" && !this.staleRun(summary)));
     const effort = (summary?.configOptions ?? []).find(
       (option: any) => option.category === "thought_level" || option.id === "reasoning_effort",
     );
@@ -3785,11 +3790,9 @@ export class AcpmuxDirectClient {
       ...(this.extensions.includes("acp.trust.set") ? { answersTrust: true } : {}),
       sessionId: this.selectedSessionId,
       // A replayed turn is history: no live "Working for" clock.
-      isWorking:
-        this.replayThrough === undefined &&
-        !this.stopGaveUp &&
-        // acpmux may still list a paused queue's session as running from before its turn failed.
-        (this.turnOpen || (summary?.status === "running" && !this.staleRun(summary))),
+      isWorking: working,
+      // A Stop the turn has not answered yet: a turn event after it (`stopAnswered`) ends it.
+      ...(working && this.stopAfterSeq !== undefined ? { stopping: true as const } : {}),
       ...(this.replayThrough === undefined && this.turnTokens ? { turnTokens: this.turnTokens } : {}),
       ...(this.replayThrough === undefined && this.turnOpen && this.silentTurn ? { silentTurn: true as const } : {}),
       // Only a peer runs on another clock; this computer's own sessions need no correction.
@@ -4408,6 +4411,8 @@ export class AcpmuxDirectClient {
       this.stopGaveUp = true;
       this.notice(translate("stop.forced"));
     }, STOP_GRACE_MS);
+    // Stop shows it was heard until the turn ends (the snapshot's `stopping`).
+    this.emit();
   }
   /// Withdraws a queued prompt before its turn starts; `removed` is false once it started.
   async removeQueued(promptId: string): Promise<{ removed: boolean }> {
