@@ -1182,9 +1182,10 @@ export class AcpmuxDirectClient {
   /// turn ends, or a turn opens after it. Apart from `stopAfterSeq`, which the stopped turn's own late
   /// `turn_started` answers.
   private stoppingAfterSeq?: number;
-  /// Stop went out while acpmux listed the chat running but its turn had not opened here yet: the
-  /// next turn to open is the stopped one.
-  private stoppingBeforeOpen = false;
+  /// Stop went out while acpmux listed the chat running but its turn had not opened here yet:
+  /// `"pending"` until the next turn opens, then that opener's seq, so a rebuild replaying the same
+  /// opener still treats it as the stopped turn's own.
+  private stoppedTurnOpener?: "pending" | number;
   /// A fork's `forked` boundary event: its copied history ends there (cx-ncc.61's versions).
   private forkedAtSeq: number | undefined;
   /// Session replay (replay/ReplayScreen.tsx): the recorded events are folded only through this seq.
@@ -1635,7 +1636,7 @@ export class AcpmuxDirectClient {
     this.stopGaveUp = false;
     this.stopAfterSeq = undefined;
     this.stoppingAfterSeq = undefined;
-    this.stoppingBeforeOpen = false;
+    this.stoppedTurnOpener = undefined;
     this.events = [];
     this.turnOpener = undefined;
     this.historyExhausted = false;
@@ -2909,11 +2910,17 @@ export class AcpmuxDirectClient {
   }
 
   /// A turn that opens after a Stop, with none open, is a new one, unless Stop went out before the
-  /// stopped turn opened here (`stoppingBeforeOpen`): then that first opening is the stopped turn's own.
+  /// stopped turn opened here (`stoppedTurnOpener`): then that first opening, and its replays, are the
+  /// stopped turn's own.
   private stoppingOpens(event: EventRecord): void {
     if (this.turnOpen || this.stoppingAfterSeq === undefined || event.seq <= this.stoppingAfterSeq) return;
-    if (this.stoppingBeforeOpen) this.stoppingBeforeOpen = false;
-    else this.stoppingAfterSeq = undefined;
+    if (this.stoppedTurnOpener === "pending") this.stoppedTurnOpener = event.seq;
+    else if (this.stoppedTurnOpener === undefined || event.seq > this.stoppedTurnOpener) this.stoppingEnded();
+  }
+
+  private stoppingEnded(): void {
+    this.stoppingAfterSeq = undefined;
+    this.stoppedTurnOpener = undefined;
   }
 
   /// A decided question stays in the transcript as a compact record where its card was: what was
@@ -3318,7 +3325,7 @@ export class AcpmuxDirectClient {
         this.landSteer();
         // Stop was answered: its grace must not judge the next turn.
         this.stopAnswered(event);
-        if (this.stoppingAfterSeq !== undefined && event.seq > this.stoppingAfterSeq) this.stoppingAfterSeq = undefined;
+        if (this.stoppingAfterSeq !== undefined && event.seq > this.stoppingAfterSeq) this.stoppingEnded();
         this.pendingPermission = undefined;
         this.waitingPermissions.clear();
         this.groupedPermissions.clear();
@@ -3735,10 +3742,7 @@ export class AcpmuxDirectClient {
       // acpmux may still list a paused queue as running after its turn failed.
       (this.turnOpen || (summary?.status === "running" && !this.staleRun(summary)));
     // A chat no longer working has no Stop pending, even when no turn event said the turn ended.
-    if (!working && this.replayThrough === undefined) {
-      this.stoppingAfterSeq = undefined;
-      this.stoppingBeforeOpen = false;
-    }
+    if (!working && this.replayThrough === undefined) this.stoppingEnded();
     const effort = (summary?.configOptions ?? []).find(
       (option: any) => option.category === "thought_level" || option.id === "reasoning_effort",
     );
@@ -4440,7 +4444,7 @@ export class AcpmuxDirectClient {
     // state is loaded: during a switch's hold Stop goes to the chat still drawn, not the one loading.
     if (sessionId === this.selectedSessionId) {
       this.stoppingAfterSeq = this.lastSeq;
-      this.stoppingBeforeOpen = !this.turnOpen;
+      this.stoppedTurnOpener = this.turnOpen ? undefined : "pending";
       this.emit();
     }
   }
