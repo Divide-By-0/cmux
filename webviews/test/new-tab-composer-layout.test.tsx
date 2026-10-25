@@ -1,7 +1,6 @@
 // The New Tab composer and the agent composer are one card (Leo 2026-10-13: the field, its
-// selection and the project and model pickers under it read as illogical). As in the agent
-// composer (Composer.tsx): the field on top, then the bar with the agent's model chip and Send,
-// then the location row with the project, inside the same card. The project is never in the bar.
+// selection and the project and model pickers under it read as illogical). Claude's quiet row
+// keeps the location controls and model/Send controls together under the field, inside the card.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
 import { act } from "react";

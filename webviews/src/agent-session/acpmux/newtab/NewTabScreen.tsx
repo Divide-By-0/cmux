@@ -481,8 +481,8 @@ export function NewTabScreen(props: Props) {
       data-all-chats={allChats || undefined}
     >
       {/* One card, the agent composer's (Composer.tsx; Leo 2026-10-13): the field on top, then the
-          bar with the agent's model chip, the mic and Send, then the location row with the project
-          the chat starts in (ComposerContext, the composer's own). */}
+          quiet row with the location, model chip, mic and Send. ComposerContext owns the location
+          controls and the project the chat starts in. */}
       <div ref={setBox} className="nt-box">
         {/* A press anywhere on the field's row (its padding, the glyph) focuses the field, as a
             browser's address bar does; the text itself keeps its own press (caret, selection).
@@ -523,12 +523,27 @@ export function NewTabScreen(props: Props) {
             }}
           />
         </div>
-        {/* The button row: a right-click here shows the mic hidden from its own (composerChrome.tsx);
-            this page draws no context ring. */}
+        {/* Claude's quiet row: location leads, then the model controls and Send. Keeping the
+            context and controls in one row leaves no tray above or below the prompt. */}
         <ChromeArea className="acpmux-chrome-area" items={[chrome.dictation]}>
           <div className="nt-pickers" onPointerDownCapture={touch}>
             {/* The folder Enter asks in (screenActions: the picked project, else the tab's), so a pick's
-              switch is the one Enter reuses. */}
+              switch is the one Enter reuses. ComposerContext renders its leading folder and machine
+              controls into this same quiet row. */}
+            <ComposerContext
+              summary={{
+                ...chipSnapshot.summary,
+                sessionId: chipSnapshot.summary?.sessionId ?? "",
+                ...(askFolder ? { cwd: askFolder } : { cwd: undefined }),
+              }}
+              // A New Tab chat starts where the page runs (screenActions onAsk sends no peer): the
+              // row lists only this machine's chats, so its Computer menu offers no other.
+              sessions={localSessions}
+              {...(props.machineName ? { localName: props.machineName } : {})}
+              projectChoices={props.projects ?? []}
+              onProject={(cwd) => pickProject(cwd)}
+              {...(browseProject ? { onBrowseProject: browseProject } : {})}
+            />
             {Chips && <Chips snapshot={chipSnapshot} {...(chatFolder ? { cwd: chatFolder } : {})} />}
             <span className="acpmux-composer-actions">
               {props.accessory}
@@ -546,24 +561,6 @@ export function NewTabScreen(props: Props) {
             </span>
           </div>
         </ChromeArea>
-        {/* Where the chat starts: the folder Enter asks in (askFolder), picked as in the agent
-            composer's location row; never the home ~ the tab inherited (cx-7fje0). */}
-        <div className="nt-location" onPointerDownCapture={touch}>
-          <ComposerContext
-            summary={{
-              ...chipSnapshot.summary,
-              sessionId: chipSnapshot.summary?.sessionId ?? "",
-              ...(askFolder ? { cwd: askFolder } : { cwd: undefined }),
-            }}
-            // A New Tab chat starts where the page runs (screenActions onAsk sends no peer): the
-            // row lists only this machine's chats, so its Computer menu offers no other.
-            sessions={localSessions}
-            {...(props.machineName ? { localName: props.machineName } : {})}
-            projectChoices={props.projects ?? []}
-            onProject={(cwd) => pickProject(cwd)}
-            {...(browseProject ? { onBrowseProject: browseProject } : {})}
-          />
-        </div>
       </div>
       {rows.length > 0 && box && (
         <Popover

@@ -60,35 +60,39 @@
   font-size: 15px;
   caret-color: var(--agent-ansi-5, #d670d6); /* caret-color: the shell mode's color, as its glyph */
 }
-/* The card's bar, the agent composer's (Leo 2026-10-13): the agent's model, effort and speed chip,
-   then the mic and Send at the end (acpmux-composer-actions). The chips keep the composer's own
-   look; the project is the location row's below (.nt-location). */
+/* Claude's quiet row (Leo 2026-10-23): folder and computer lead, then the model controls and Send.
+   The location and composer controls share one row under the prompt, with no tray above or below. */
 .nt-pickers {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 2px;
-  min-height: 34px;
-  padding: 0 10px 6px;
+  min-height: 36px;
+  padding: 0 12px;
   box-sizing: border-box;
 }
-/* The location row (ComposerContext, the composer's own) is the card's last row: its wrapper only
-   marks the page as touched, so it draws nothing of its own. */
-.nt-location {
+/* ComposerContext owns the folder/computer menus, but the New Tab places its contents in this
+   same quiet row. The leading pair stays left while the model controls keep the right side. */
+.nt-pickers > .acpmux-composer-context {
   display: contents;
+}
+.nt-pickers > .acpmux-composer-context > .acpmux-location-leading {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-right: auto;
+}
+.nt-pickers > .acpmux-composer-context > .acpmux-location-leading > .acpmux-location-picker,
+.nt-pickers > .acpmux-composer-context > .acpmux-location-picker {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.nt-pickers > .acpmux-composer-context > .acpmux-location-picker:last-child {
+  margin-left: 0;
 }
 /* The location row tints itself with the card's bottom corners in every template. The card itself
    never clips: the model picker opens in the card, above or below its chip (a clipping card cut it
    to its search field, Lawrence 2026-10-13). */
-.nt-box .acpmux-composer-context {
-  border-radius: 0 0 20px 20px;
-}
-.nt-screen[data-template="console"] .nt-box .acpmux-composer-context {
-  border-radius: 0 0 10px 10px;
-}
-.nt-screen[data-template="composer"] .nt-box .acpmux-composer-context {
-  border-radius: 0 0 24px 24px;
-}
+.nt-box .acpmux-composer-context { border-radius: 0; }
 /* Templates (cx-yabk, plans/cmux-next/new-tab-templates.md): the same screen, other sections and
    type. The theme's own tones only; no accent color. */
 .nt-prompt-glyph {
