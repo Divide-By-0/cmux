@@ -127,14 +127,18 @@ test("a Stop sent before its turn opens here keeps saying it is stopping through
     daemon.emit(id, { mux: "turn_started" });
     // The agent's first words come after the opener: once they show, the opener has been read.
     const said = (words: string) => JSON.stringify(view.shown.rows ?? []).includes(words);
-    daemon.emit(id, { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "stop-opener-before-rebuild" } } });
+    daemon.emit(id, {
+      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "stop-opener-before-rebuild" } },
+    });
     await until(() => said("stop-opener-before-rebuild"));
     expect(view.shown.isWorking).toBe(true);
     expect(view.shown.stopping).toBe(true);
     // A rebuild (reconnect, older history, lag resync) replays that same opener: still the stopped turn.
     (client as unknown as { rebuild(): void }).rebuild();
     daemon.touch(id, { status: "running" });
-    daemon.emit(id, { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "stop-opener-after-rebuild" } } });
+    daemon.emit(id, {
+      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "stop-opener-after-rebuild" } },
+    });
     await until(() => said("stop-opener-after-rebuild"));
     expect(view.shown.isWorking).toBe(true);
     expect(view.shown.stopping).toBe(true);
@@ -221,6 +225,7 @@ test("cancel resolution and the old grace deadline do not end Stopping", () =>
     expect(f.shown().isWorking).toBe(true);
     expect(f.shown().stopping).toBe(true);
     expect(f.shown().rows.filter((row) => row.kind === "notice")).toHaveLength(notices);
+    jest.useRealTimers();
     await f.end();
     expect(f.shown().stopping).toBeUndefined();
     await f.start("stop-turn-2");
@@ -263,6 +268,7 @@ test("disconnect clears Stopping and cannot leave a later turn stopping", () =>
     expect(f.shown().stopping).toBeUndefined();
     // Resume deliveries before the reconnect timer runs, then simulate the daemon's next turn.
     f.socket.readyState = WebSocket.OPEN;
+    jest.useRealTimers();
     await f.start("stop-turn-2");
     expect(f.shown().isWorking).toBe(true);
     expect(f.shown().stopping).toBeUndefined();
