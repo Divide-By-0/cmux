@@ -92,20 +92,15 @@ async function mount(options: { machineName?: string; snapshot?: AcpmuxSnapshot 
   );
 }
 
-test("the New Tab card is the composer's: field, then model and Send, then the project row", async () => {
+test("the Claude New Tab card keeps location and controls in one quiet row", async () => {
   await mount();
   const card = host.querySelector<HTMLElement>(".nt-box")!;
-  const parts = [...card.querySelectorAll<HTMLElement>(".nt-field, .acpmux-chips, .nt-send, .acpmux-composer-context")];
-  expect(parts.map((part) => part.className.split(" ")[0])).toEqual([
-    "nt-field",
-    "acpmux-chips",
-    "acpmux-send",
-    "acpmux-composer-context",
-  ]);
-  // The project is the location row's, as in the agent composer, and never in the bar.
-  const row = card.querySelector<HTMLElement>(".acpmux-composer-context")!;
+  const row = card.querySelector<HTMLElement>(".nt-pickers")!;
+  expect(row.querySelector(".acpmux-composer-context")).not.toBeNull();
+  expect(row.querySelector(".acpmux-chips")).not.toBeNull();
+  expect(row.querySelector(".nt-send")).not.toBeNull();
   expect(row.textContent).toContain("app");
-  expect(card.querySelector('.nt-pickers [aria-label="Project"], .nt-pickers .acpmux-location-button')).toBeNull();
+  expect(card.querySelector(".nt-location")).toBeNull();
 });
 
 // Review (#20148): the composer's Computer menu listed a remote chat's machine, so the row could
