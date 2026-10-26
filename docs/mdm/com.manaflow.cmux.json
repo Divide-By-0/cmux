@@ -1257,6 +1257,12 @@
       "title" : "Theme Edits",
       "type" : "object"
     },
+    "appearance.wallpaperTint" : {
+      "default" : true,
+      "description" : "The glass takes the colors of your desktop picture and follows it when the picture or Space changes.",
+      "title" : "Tint with Desktop Wallpaper",
+      "type" : "boolean"
+    },
     "browser.agentMouse.maxMoveMs" : {
       "default" : 350,
       "description" : "The longest time one agent pointer move takes with human motion. Short moves take less.",
@@ -4150,6 +4156,17 @@
       "description" : "A mark while an agent works in the workspace.",
       "title" : "Agent Working",
       "type" : "boolean"
+    },
+    "ssh.linkAllowedHosts" : {
+      "default" : [
+
+      ],
+      "description" : "An ssh:// link from another app connects to these hosts without asking. Remove a host to be asked again. Saved machines and acpmux peers never ask.",
+      "items" : {
+        "type" : "string"
+      },
+      "title" : "Always Allowed SSH Link Hosts",
+      "type" : "array"
     },
     "status.inferCommandBusy" : {
       "default" : false,

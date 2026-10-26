@@ -925,6 +925,27 @@
 		</dict>
 		<dict>
 			<key>pfm_default</key>
+			<array/>
+			<key>pfm_description</key>
+			<string>An ssh:// link from another app connects to these hosts without asking. Remove a host to be asked again. Saved machines and acpmux peers never ask.</string>
+			<key>pfm_name</key>
+			<string>ssh.linkAllowedHosts</string>
+			<key>pfm_subkeys</key>
+			<array>
+				<dict>
+					<key>pfm_name</key>
+					<string>Item</string>
+					<key>pfm_type</key>
+					<string>string</string>
+				</dict>
+			</array>
+			<key>pfm_title</key>
+			<string>Always Allowed SSH Link Hosts</string>
+			<key>pfm_type</key>
+			<string>array</string>
+		</dict>
+		<dict>
+			<key>pfm_default</key>
 			<true/>
 			<key>pfm_description</key>
 			<string>An agent can start other agent sessions to work on parts of a task in parallel. They show under its session in the sidebar.</string>
@@ -2198,6 +2219,18 @@
 			<string>Dim Inactive Windows</string>
 			<key>pfm_type</key>
 			<string>real</string>
+		</dict>
+		<dict>
+			<key>pfm_default</key>
+			<true/>
+			<key>pfm_description</key>
+			<string>The glass takes the colors of your desktop picture and follows it when the picture or Space changes.</string>
+			<key>pfm_name</key>
+			<string>appearance.wallpaperTint</string>
+			<key>pfm_title</key>
+			<string>Tint with Desktop Wallpaper</string>
+			<key>pfm_type</key>
+			<string>boolean</string>
 		</dict>
 		<dict>
 			<key>pfm_default</key>

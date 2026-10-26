@@ -172,7 +172,8 @@
         "CmuxNextPagesTestSupport",
         "CmuxNextRemoteFetch",
         "CmuxNextSettings",
-        "CmuxNextWakeups"
+        "CmuxNextWakeups",
+        "CmuxNextWakeupsTestSupport"
       ],
       "packages": [],
       "reads": [
@@ -410,6 +411,7 @@
         "CmuxNextMacScreen",
         "CmuxNextMobile",
         "CmuxNextNowPlaying",
+        "CmuxNextOnboarding",
         "CmuxNextPagesTestSupport",
         "CmuxNextPalette",
         "CmuxNextProcessEnvironment",
@@ -868,7 +870,8 @@
       "path": "Packages/macOS/CmuxNext/Tests/CmuxNextDaemonTests",
       "targets": [
         "CmuxNextCompat",
-        "CmuxNextDaemon"
+        "CmuxNextDaemon",
+        "CmuxNextWakeupsTestSupport"
       ],
       "packages": [],
       "reads": [
