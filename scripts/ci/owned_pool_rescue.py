@@ -128,7 +128,8 @@ its retry_runs_on, the Blacksmith pool. A job asking for a capability label no
 idle mini carries waits like any other queued owned job, so it is moved after
 the same budget.
 
-Dispatches of iroh-release-gate.yml are watched the same way. Its `runner`
+Dispatches of iroh-release-gate.yml, and of cmux-next-dev-daily.yml (its
+verify job), are watched the same way. Its `runner`
 job runs e2e_runner_pool.py for the Tailscale version-skew job alone, and
 only takes an owned pool with a machine free now (no queue rounds), so that
 job rarely waits. Its simulator-e2e jobs stay on Blacksmith, but they run in
@@ -153,7 +154,10 @@ re-run, keeping the jobs that had already finished. That re-run takes the
 lane's configured retry route, so the watch ends there or continues on
 cmux-next's owned label. A
 stuck run that finished some other way (a newer push cancelled it) is not
-re-run. Its watch lasts SIDE_WATCH_LIMIT_SECONDS. Side lanes upload no marker
+re-run. Its watch lasts SIDE_WATCH_LIMIT_SECONDS. A nightly-next watch does
+not end when its accepted jobs are all that exist: prepare-nightly-variant takes
+the side label only after build-nightly-app finishes, so it lasts until the
+run finishes, within NIGHTLY_WATCH_LIMIT_SECONDS. Side lanes upload no marker
 (cmux-next.yml aside), so the sweeper finds one's run by path once it has
 failed (GitHub.failed_runs()), which a refused job makes it: its failed jobs
 are re-run then. A failed job of such a run that is not a refusal keeps it
@@ -298,10 +302,13 @@ E2E_WORKFLOW_PATH = ".github/workflows/test-e2e.yml"
 IOS_TEST_WORKFLOW_PATH = ".github/workflows/test-ios.yml"
 IOS_SCREENSHOTS_WORKFLOW_PATH = ".github/workflows/ios-screenshots.yml"
 IROH_RELEASE_GATE_WORKFLOW_PATH = ".github/workflows/iroh-release-gate.yml"
+# The cmux NEXT DEV publisher's `runner` job offers its secret-free verify job
+# to an owned Mac free now, like iroh-release-gate.yml's.
+CMUX_NEXT_DEV_DAILY_WORKFLOW_PATH = ".github/workflows/cmux-next-dev-daily.yml"
 # workflow_dispatch runs watched like an E2E run: each has a `runner` job that
 # picks the pool and uploads the marker.
 DISPATCH_WORKFLOW_PATHS = (E2E_WORKFLOW_PATH, IOS_TEST_WORKFLOW_PATH, IOS_SCREENSHOTS_WORKFLOW_PATH,
-                           IROH_RELEASE_GATE_WORKFLOW_PATH)
+                           IROH_RELEASE_GATE_WORKFLOW_PATH, CMUX_NEXT_DEV_DAILY_WORKFLOW_PATH)
 # Workflows whose picker may queue a run's jobs on an owned pool within
 # CI_PR_POOL_QUEUE_ROUNDS (ios_runner_pool.py and e2e_runner_pool.py read it
 # since run 36136190497).
@@ -420,6 +427,9 @@ E2E_WATCH_LIMIT_SECONDS = 150 * 60
 # (cloud-machine-tests), which can wait in a busy Linux queue; a watch that
 # ended before the job existed would leave it on the fleet unwatched.
 SIDE_WATCH_LIMIT_SECONDS = WATCH_LIMIT_SECONDS
+# A nightly's owned jobs run one after another: the app build (about 20 min
+# on a mini, longer cold), then prepare-nightly-variant (up to 40 min).
+NIGHTLY_WATCH_LIMIT_SECONDS = E2E_WATCH_LIMIT_SECONDS
 READ_ATTEMPTS = 3
 READ_RETRY_SECONDS = 10
 MARKER_PREFIX = "macos-pool-persistent"
@@ -436,9 +446,12 @@ ADMISSION_JOB = "macos / macOS compile admission"
 CANCEL_WAIT_SECONDS = 20 * 60
 FORCE_CANCEL_AFTER_SECONDS = 90
 FORCE_CANCEL_AGAIN_SECONDS = 5 * 60
+# Room for one watch's waits through GitHub rate limits (RATE_LIMIT_WAIT_SECONDS).
+_RATE_LIMIT_ROOM_SECONDS = 15 * 60
 # A rescue may run this long past the watch's end, so a refusal found late
-# in the watch still gets its cancel settled and its re-run.
-RESCUE_GRACE_SECONDS = 25 * 60
+# in the watch still gets its cancel settled and its re-run, rate-limit waits
+# included (a sweeper's handover joins its rescues for this long).
+RESCUE_GRACE_SECONDS = 25 * 60 + _RATE_LIMIT_ROOM_SECONDS
 # Kept back from the job timeout for checkout and the summary.
 JOB_TIMEOUT_MARGIN_SECONDS = 5 * 60
 # ci-owned-pool-rescue.yml's timeout-minutes: the longest watch (an E2E
@@ -895,6 +908,42 @@ def _headers(token: str) -> dict[str, str]:
     }
 
 
+# A request GitHub refuses for a rate limit waits and is tried again instead of ending the watch.
+# A rescue that cancelled a run and then lost its re-run to a refusal left the run cancelled for
+# good (2026-10-26: nightly-next run 40340830337 at e22f9384 was cancelled at 14:36:06Z and the
+# watch "gave up: HTTP Error 403" at 14:37:38Z, so the tip never built). The repository's
+# GITHUB_TOKENs share one installation budget and a secondary limit that sends no reset, so a
+# refusal waits Retry-After, or until x-ratelimit-reset when the budget reads spent, or else
+# 60, 120, 240, then 300 s; one job waits at most RATE_LIMIT_WAIT_SECONDS in all, which the
+# job timeout keeps room for (JOB_TIMEOUT_SECONDS, ci-owned-pool-rescue.yml's timeout-minutes).
+RATE_LIMIT_WAIT_SECONDS = _RATE_LIMIT_ROOM_SECONDS
+RATE_LIMIT_FIRST_WAIT_SECONDS = 60
+RATE_LIMIT_MAX_WAIT_SECONDS = 300
+
+
+def rate_limit_wait(code: int, headers: Mapping[str, str], body: str, now: float, tries: int) -> float | None:
+    """Seconds to wait before retrying a refused request, or None when it is not a rate limit.
+
+    A permission 403 has no Retry-After, no spent budget and no "rate limit" in its message."""
+    if code not in (403, 429):
+        return None
+    get = {str(key).lower(): str(value) for key, value in (headers or {}).items()}.get
+    retry_after = (get("retry-after") or "").strip()
+    remaining = (get("x-ratelimit-remaining") or "").strip()
+    said = body.lower()
+    # The same messages scripts/ci/gh_budget_wait.sh treats as a rate limit.
+    limited = code == 429 or bool(retry_after) or remaining == "0" or any(
+        phrase in said for phrase in ("rate limit", "abuse detection", "too many requests"))
+    if not limited:
+        return None
+    if retry_after.isdigit():
+        return max(float(retry_after), 1.0)
+    reset = (get("x-ratelimit-reset") or "").strip()
+    if remaining == "0" and reset.isdigit() and int(reset) > now:
+        return int(reset) - now + 5
+    return float(min(RATE_LIMIT_FIRST_WAIT_SECONDS << min(tries, 8), RATE_LIMIT_MAX_WAIT_SECONDS))
+
+
 class GitHub:
     """The Actions API. Reads may use `read_token`, writes always use `token`.
 
@@ -912,6 +961,49 @@ class GitHub:
         self.repo = repo
         self.headers = _headers(token)
         self.read_headers = _headers(read_token) if read_token else self.headers
+        self.sleep: Callable[[float], None] = time.sleep
+        # Each watch (the sweeper runs one per thread on this one client) has its own
+        # RATE_LIMIT_WAIT_SECONDS, so one run's waits never spend another's.
+        self._limits = threading.local()
+
+    @property
+    def rate_limit_waited(self) -> float:
+        """This thread's waits for rate limits so far."""
+        return getattr(self._limits, "waited", 0.0)
+
+    @property
+    def rate_limit_tries(self) -> int:
+        return getattr(self._limits, "tries", 0)
+
+    def no_rate_limit_waits(self) -> None:
+        """This thread's requests raise on a rate limit instead of waiting (the sweeper's own
+        listings, which run on its schedule and must not push its handover past the job's timeout)."""
+        self._limits.waited = float(RATE_LIMIT_WAIT_SECONDS)
+
+    def _wait_for_rate_limit(self, method: str, path: str, error: urllib.error.HTTPError) -> bool:
+        """Wait out a GITHUB_TOKEN request's rate-limit refusal; False when it is not one or the budget is spent."""
+        try:
+            said = error.read().decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001 - the body only explains the refusal
+            said = ""
+        headers = dict(error.headers.items()) if error.headers is not None else {}
+        wait = rate_limit_wait(error.code, headers, said, time.time(), self.rate_limit_tries)
+        if wait is None:
+            return False
+        left = RATE_LIMIT_WAIT_SECONDS - self.rate_limit_waited
+        if left < 1:
+            return False
+        wait = min(wait, left)
+        self._limits.tries = self.rate_limit_tries + 1
+        self._limits.waited = self.rate_limit_waited + wait
+        shown = {key: value for key, value in headers.items()
+                 if key.lower().startswith(("x-ratelimit", "retry-after", "x-github-request-id"))}
+        print(f"::notice title=GitHub API budget::{method} {path} was refused for a rate limit "
+              f"(HTTP {error.code}, {shown or 'no rate-limit headers'}: {said.strip()[:200]}); "
+              f"waiting {wait:.0f}s ({self.rate_limit_waited - wait:.0f}s waited so far)",
+              file=sys.stderr, flush=True)
+        self.sleep(wait)
+        return True
 
     def request(self, method: str, path: str, *, own_token: bool = False, body: Mapping | None = None) -> Any:
         headers = self.read_headers if method == "GET" and not own_token else self.headers
@@ -923,11 +1015,17 @@ class GitHub:
                 seen = getattr(response, "headers", None) or {}
                 self.remaining = seen.get("X-RateLimit-Remaining") or self.remaining
                 self.limit = seen.get("X-RateLimit-Limit") or self.limit
+            self._limits.tries = 0
         except urllib.error.HTTPError as error:
-            if error.code not in (401, 403) or headers is self.headers:
+            if headers is self.headers and error.code in (403, 429) and self._wait_for_rate_limit(method, path, error):
+                # The same request again, after the wait (a refused request did nothing on GitHub's side).
+                return self.request(method, path, own_token=own_token,
+                                    body=json.loads(data) if data is not None else None)
+            if error.code not in (401, 403, 429) or headers is self.headers:
                 raise
-            if error.code == 403:
-                # The installation lacks this read's permission: this one read goes on GITHUB_TOKEN.
+            if error.code in (403, 429):
+                # The installation lacks this read's permission, or its budget is spent: this one
+                # read goes on GITHUB_TOKEN (which waits through a rate limit).
                 return self.request(method, path, own_token=True)
             self.read_headers = self.headers
             return self.request(method, path)
@@ -999,10 +1097,13 @@ class GitHub:
             runs = [run for run in (data or {}).get("workflow_runs") or [] if isinstance(run, Mapping)]
             for run in runs:
                 finished = parse_time(run.get("updated_at"))
-                if run.get("id") and run.get("path") in SIDE_WORKFLOW_PATHS and not (
+                entry = (int(run.get("id") or 0), int(run.get("run_attempt") or 0))
+                if entry[0] and entry not in found and run.get("path") in SIDE_WORKFLOW_PATHS and not (
                         since is not None and finished is not None and finished < since):
-                    found.append((int(run["id"]), int(run.get("run_attempt") or 0)))
-            if len(runs) < count:
+                    found.append(entry)
+            # A status-filtered page can come back short before the last one (queue_janitor.GitHub.
+            # in_flight_runs()), so only an empty page ends the listing before `pages`.
+            if not runs:
                 break
         return found
 
@@ -1135,7 +1236,14 @@ class Target:
         return E2E_PICKER_JOB if self.e2e else PICKER_JOB
 
     @property
+    def late_owned_jobs(self) -> bool:
+        """nightly-next's nightly.yml puts prepare-nightly-variant on the side label after the app build."""
+        return self.nightly and self.push_branch == "nightly-next"
+
+    @property
     def watch_limit(self) -> int:
+        if self.late_owned_jobs:
+            return NIGHTLY_WATCH_LIMIT_SECONDS
         if self.side:
             return SIDE_WATCH_LIMIT_SECONDS
         return E2E_WATCH_LIMIT_SECONDS if self.e2e else WATCH_LIMIT_SECONDS
@@ -1260,6 +1368,9 @@ def watch(api: GitHub, target: Target, *, budget_seconds: int,
                 log("a side-lane job asked for a persistent pool")
             elif run_finished(jobs):
                 return "stop", "no job of the run asked for a persistent pool"
+            elif not jobs and read(lambda: api.run(target.run_id), sleep, log).get("status") == "completed":
+                # A pending run cancelled before any job (a newer nightly took its place).
+                return "stop", "the run finished with no job"
         elif not on_persistent and target.attempt > 1 and not target.full_rerun:
             # A re-run of failed jobs: no `changes` job, no marker. Follow it
             # if a job asks for an owned pool. When it runs compile admission
@@ -1349,8 +1460,12 @@ def watch(api: GitHub, target: Target, *, budget_seconds: int,
                         and all(accepted(job, seen_at) for job in owned)):
                     # The fleet took the retry; later attempts never come back to it.
                     return "stop", "the fleet accepted the retry"
-                if target.side and owned and all(accepted(job, seen_at) for job in owned):
+                if target.side and not target.late_owned_jobs and owned \
+                        and all(accepted(job, seen_at) for job in owned):
                     # A side lane's jobs are all created by now, and none can be refused any more.
+                    # Not nightly-next's: prepare-nightly-variant takes the side label only once
+                    # build-nightly-app has finished, and its runner can refuse it then
+                    # (run 40144317744), so that watch lasts until the run finishes.
                     return "stop", "the fleet accepted the side-lane jobs"
         if now() >= deadline:
             if target.nightly:
@@ -1374,7 +1489,8 @@ def bot_rerun_leaves_owned(path: str, attempt: int) -> bool:
       macOS legs read `github.run_attempt == 1 && vars.CI_SIDE_LANE_RUNNER || 'blacksmith-...-macos-...'`);
     - cmux-next keeps the minis through REFUSAL_RESCUE_ATTEMPT and takes Blacksmith after it;
     - ci.yml's re-run of failed jobs reuses attempt 1's placement through LAST_OWNED_ATTEMPT;
-    - test-ios.yml, ios-screenshots.yml and iroh-release-gate.yml take their retry route from attempt 2;
+    - test-ios.yml, ios-screenshots.yml, iroh-release-gate.yml and cmux-next-dev-daily.yml take their retry
+      route from attempt 2;
       test-e2e.yml does not count, since a UI run's retry_label stays on its owned pool and the path alone
       cannot tell one apart;
     - the base and PR autofix's Mac exports (OWNED_EVERY_ATTEMPT_PATHS) keep their owned label on every
@@ -1430,6 +1546,13 @@ def e2e_build_unfinished(api: GitHub, target: Target, sleep: Callable[[float], N
 def pull_moved(api: GitHub, target: Target, sleep: Callable[[float], None],
                log: Callable[[str], None]) -> str:
     """Why the pull request (or main) no longer wants this run, or "" when it still does."""
+    if target.nightly and target.push_branch == "nightly-next":
+        # Each nightly-next run builds and signs in groups of its own (nightly.yml
+        # scopes them to github.run_id), so a newer tip builds alongside this one
+        # and never makes it moot: a newer tip is never a reason to cancel a
+        # nightly (Nightly freshness). publish-nightly's order check refuses a
+        # build no newer than the feed, so re-running an older one never downgrades.
+        return ""
     if target.nightly:
         # nightly.yml's concurrency group never cancels in progress: a newer
         # run waits behind this one, and a re-run of this one would join the
@@ -1517,13 +1640,19 @@ def rescue(api: GitHub, target: Target, *, now: Callable[[], dt.datetime], sleep
     if int(run.get("run_attempt") or 0) != target.attempt:
         return "not rescued: someone else already re-ran the run"
     if run.get("status") != "completed" and deadline is not None and \
-            (deadline - now()).total_seconds() < CANCEL_WAIT_SECONDS + RERUN_MARGIN_SECONDS:
+            (deadline - now()).total_seconds() < CANCEL_WAIT_SECONDS + RERUN_MARGIN_SECONDS + max(
+                0.0, RATE_LIMIT_WAIT_SECONDS - getattr(api, "rate_limit_waited", RATE_LIMIT_WAIT_SECONDS)):
+        # (The rate-limit waits this watch may still make count too: they do not shorten the settle.)
         # A job killed between the cancel and the re-run would leave the
         # pull request's run cancelled for good; leave it as GitHub has it.
         return "not rescued: too little of the job left to cancel and re-run"
     if run.get("status") == "completed":
-        if not (failed_only if refused is None else refused):
+        should_rerun = failed_only if refused is None else refused
+        if not should_rerun:
             return "not rescued: the run already finished"
+        if not failed_only:
+            api.rerun(target.run_id, target.attempt + 1)
+            return f"re-ran every job of run {target.run_id}; {next_attempt(target)}"
         if e2e_build_unfinished(api, target, sleep, log):
             api.rerun(target.run_id, target.attempt + 1)
             return f"re-ran every job of run {target.run_id}, so its sibling wait runs again; {next_attempt(target)}"
@@ -1532,6 +1661,9 @@ def rescue(api: GitHub, target: Target, *, now: Callable[[], dt.datetime], sleep
     api.cancel(target.run_id)
     log(f"cancelled run {target.run_id}")
     started = now()
+    # Time spent waiting through rate limits (GitHub.request) is not the run's settling time:
+    # counting it could end the settle window before the re-run (the job timeout has room for it).
+    limited_at_cancel = getattr(api, "rate_limit_waited", 0.0)
     forced_at: float | None = None
     while True:
         sleep(10)
@@ -1540,7 +1672,7 @@ def rescue(api: GitHub, target: Target, *, now: Callable[[], dt.datetime], sleep
             return "not rescued: someone else already re-ran the run"
         if run.get("status") == "completed":
             break
-        waited = (now() - started).total_seconds()
+        waited = (now() - started).total_seconds() - (getattr(api, "rate_limit_waited", 0.0) - limited_at_cancel)
         if (forced_at is None and waited >= FORCE_CANCEL_AFTER_SECONDS) or \
                 (forced_at is not None and waited - forced_at >= FORCE_CANCEL_AGAIN_SECONDS):
             forced_at = waited
@@ -1569,6 +1701,18 @@ def rescue(api: GitHub, target: Target, *, now: Callable[[], dt.datetime], sleep
         return (f"re-ran run {target.run_id}; attempt {target.attempt + 1} picks again, the owned machines "
                 "free now first, and the sweeper watches it")
     return f"re-ran run {target.run_id}; attempt {target.attempt + 1} takes an ephemeral pool"
+
+
+def gave_up(target: Target, error: BaseException) -> str:
+    """The give-up line; for a nightly an error annotation, since its run may now sit cancelled.
+
+    nightly-next-tick.yml re-runs a nightly-next tip whose newest run is cancelled, so the
+    tip still builds; the annotation says why it needed to."""
+    text = f"gave up: {error}"
+    if target.nightly:
+        text = (f"::error title=nightly rescue::run {target.run_id} {text}; if it was cancelled, "
+                "the nightly-next tick re-runs it (nightly-next-tick.yml)")
+    return text
 
 
 def main(argv: Sequence[str] | None = None, env: Mapping[str, str] | None = None, *,
@@ -1635,7 +1779,7 @@ def main(argv: Sequence[str] | None = None, env: Mapping[str, str] | None = None
                              now=clock, sleep=sleep, log=log, side_seconds=side_seconds))
     except (*READ_ERRORS, Aborted) as error:
         # A failed watch leaves the run exactly as GitHub scheduled it.
-        finish(f"gave up: {error}")
+        finish(gave_up(target, error))
         return 1
 
 
@@ -1682,13 +1826,33 @@ def follow(client: GitHub, target: Target, *, seconds: int, queue_rounds: str | 
                             log=log, deadline=deadline, floor_seconds=effective_seconds)
     if outcome not in ("rescue", "refused"):
         return f"stopped: {reason}"
+    if target.refusals_only and outcome == "rescue":
+        # A refusals-only cmux-next attempt deliberately stays on its owned
+        # label while it waits for the hook to refuse the job. A queue alarm
+        # is not the refusal: keep the watch alive until the job fails or the
+        # run finishes, otherwise the later refusal has no rescue owner.
+        remaining = max(0, int((deadline - clock()).total_seconds()))
+        if remaining == 0:
+            return f"stopped: {reason}; attempt {target.attempt} stays on the minis (refusals only)"
+        log(f"queue alarm while refusals-only; continuing until refusal or run finish ({remaining}s left)")
+        outcome, reason = watch(client, target, budget_seconds=max(effective_seconds, remaining),
+                                now=clock, sleep=sleep, log=log, deadline=deadline,
+                                floor_seconds=effective_seconds)
     if target.refusals_only and outcome != "refused":
         return f"stopped: {reason}; attempt {target.attempt} stays on the minis (refusals only)"
+    refusal_jobs: list[Mapping[str, Any]] | None = None
+    dev_compile = False
+    if outcome == "refused" and target.path == CMUX_NEXT_WORKFLOW_PATH:
+        refusal_jobs = read(lambda: client.jobs(target.run_id, target.attempt), sleep, log)
+        dev_compile = any(str(job.get("name") or "") in {
+            "cmux NEXT DEV Release compile", "cmux-scheme-compile"
+        } for job in refusal_jobs)
     # A refusal re-runs the run's failed jobs. A side lane (found by the failed-run listing, sweep()) or a
     # refusals-only run that also failed on its own would re-run that failure on the minis too, so it is
     # left red; a nightly keeps its re-run (its build is the product).
     if outcome == "refused" and (target.refusals_only or target.side and not target.nightly):
-        jobs = read(lambda: client.jobs(target.run_id, target.attempt), sleep, log)
+        jobs = refusal_jobs if refusal_jobs is not None else read(
+            lambda: client.jobs(target.run_id, target.attempt), sleep, log)
         other = [str(job.get("name")) for job in jobs if job.get("conclusion") in ("failure", "timed_out")
                  and not carried(job, target.attempt_started_at) and not refused(job)]
         if other:
@@ -1718,7 +1882,7 @@ def follow(client: GitHub, target: Target, *, seconds: int, queue_rounds: str | 
     while True:
         # From attempt 2 on, keep what passed: only the owned jobs are moved.
         # An E2E run always keeps what passed (see the module docstring).
-        failed_only = outcome == "refused" or target.attempt > 1 or target.e2e or target.side
+        failed_only = (outcome == "refused" or target.attempt > 1 or target.e2e or target.side) and not dev_compile
         result = rescue(client, target, now=clock, sleep=rescue_sleep, log=log, failed_only=failed_only,
                         deadline=rescue_deadline,
                         refused=(outcome == "refused") if target.e2e or target.side else None,
@@ -1829,6 +1993,10 @@ def sweep(client: GitHub, repository: str, *, seconds: int, queue_rounds: str | 
           wait: Callable[[float], None] = time.sleep, light_retry: bool = False,
           side_seconds: int | None = None) -> dict[str, int]:
     """Watch every marked run until `sweep_seconds` pass. Returns outcome counts."""
+    # The sweeper's own listings raise on a rate limit as before (a failed read is tried next
+    # tick); only the watch threads, which cancel and re-run, wait (RESCUE_GRACE_SECONDS has room).
+    if hasattr(client, "no_rate_limit_waits"):
+        client.no_rate_limit_waits()
     stopping = threading.Event()
     lock = threading.Lock()
     outcomes: dict[str, int] = {}
@@ -1858,6 +2026,8 @@ def sweep(client: GitHub, repository: str, *, seconds: int, queue_rounds: str | 
         except (*READ_ERRORS, Aborted) as error:
             outcome = "gave up"
             say(f"gave up: {error}")
+            if target.nightly:
+                log(gave_up(target, error))  # unprefixed, so the runner reads the annotation
         except Exception as error:  # noqa: BLE001 - one run's bug must not end every other watch
             outcome = "error"
             say(f"error: {type(error).__name__}: {error}")
