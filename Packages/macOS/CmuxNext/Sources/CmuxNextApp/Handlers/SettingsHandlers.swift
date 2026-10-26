@@ -16,6 +16,9 @@ enum SettingsHandlers {
     static func bind(into registry: ActionRegistry, context: AppActionContext) {
         registry.bind("palette.openCmuxSettingsFile", run: { _ in try openCmuxConfig(context) })
         registry.bind("palette.openGhosttySettings", run: { _ in try openGhosttyConfig(context) })
+        registry.bind("settings.customizeMenus", run: { invocation in
+            try context.services.settingsWindow.show(section: nil, focus: invocation.allowsViewChange, route: "#/settings/menus")
+        })
         // R92: Settings > Terminal shows the Ghostty config diagnostics.
         registry.bind("ghostty.showDiagnostics", run: { invocation in
             try context.services.settingsWindow.show(section: .terminal, focus: invocation.allowsViewChange)
