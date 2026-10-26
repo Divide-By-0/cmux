@@ -5122,7 +5122,7 @@ function AcpmuxPane() {
   const [displayAnchor, setDisplayAnchor] = useState<HTMLElement | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deleteConfirmSession, setDeleteConfirmSession] = useState<string>();
-  const deleteInFlight = useRef<{ target: string; client: AcpmuxDirectClient }>();
+  const deleteInFlight = useRef<{ target: string; client: AcpmuxDirectClient; harness?: string }>();
   const inspectorOpener = useRef<HTMLElement | undefined>(undefined);
   const inspectorOpenRef = useRef(false);
   const inspectorHiddenSurfaceRef = useRef(false);
@@ -7797,7 +7797,7 @@ function AcpmuxPane() {
     const target = deleteConfirmSession;
     const client = directClient.current;
     if (!target || target !== snapshot.sessionId || !client) return;
-    deleteInFlight.current = { target, client };
+    deleteInFlight.current = { target, client, harness: snapshot.summary?.harness };
     await client.purge();
     // The purge can resolve after the dialog was dismissed or the pane selected another chat.
     // Never close the newly selected tab for the old chat's completion.
@@ -7827,7 +7827,14 @@ function AcpmuxPane() {
       setDeleteConfirmOpen(false);
       deleteInFlight.current = undefined;
     }
-  }, [deleteConfirmSession, snapshot.sessionId]);
+    if (
+      deleteInFlight.current?.harness &&
+      snapshot.summary?.harness &&
+      deleteInFlight.current.harness !== snapshot.summary.harness
+    ) {
+      deleteInFlight.current = undefined;
+    }
+  }, [deleteConfirmSession, snapshot.sessionId, snapshot.summary?.harness]);
   const archive = archiveRow(
     {
       sessionId: snapshot.sessionId,
@@ -9960,6 +9967,7 @@ function AcpmuxPane() {
             <DialogButton dialogKey="escape" onClick={() => {
               setDeleteConfirmOpen(false);
               setDeleteConfirmSession(undefined);
+              deleteInFlight.current = undefined;
             }}>
               {t("chatMenu.close")}
             </DialogButton>
