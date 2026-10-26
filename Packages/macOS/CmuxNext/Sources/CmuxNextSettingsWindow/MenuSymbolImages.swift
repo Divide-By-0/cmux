@@ -1,14 +1,16 @@
-import AppKit
+public import AppKit
 
 /// Settings > Menus' row icons: `cmux-page://cmux.settings/symbol/<name>` answers the SF Symbol
 /// `name` as a black template PNG at twice the menu's point size, which the page tints with a CSS
 /// mask, so each row shows the icon its right-click menu shows. Drawn when the page asks.
 @MainActor
-enum MenuSymbolImages {
-    static let prefix = "symbol"
+public struct MenuSymbolImages {
+    public static let prefix = "symbol"
+
+    public init() {}
 
     /// The PNG of `name`; nil for a name that is not an SF Symbol name or that macOS lacks.
-    static func png(_ name: String) -> Data? {
+    public func png(_ name: String) -> Data? {
         guard !name.isEmpty, name.allSatisfy({ $0.isASCII && ($0.isLowercase || $0.isNumber || $0 == ".") }) else { return nil }
         let configuration = NSImage.SymbolConfiguration(pointSize: NSFont.menuFont(ofSize: 0).pointSize * 2, weight: .regular)
         guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(configuration) else { return nil }

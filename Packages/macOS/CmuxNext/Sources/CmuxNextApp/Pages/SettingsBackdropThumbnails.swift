@@ -1,6 +1,7 @@
 import AppKit
 import CmuxNextDesign
 import CmuxNextPages
+import CmuxNextSettingsWindow
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -48,7 +49,7 @@ final class SettingsBackdropThumbnails: PageDynamicResourceSource {
         if request.prefix == MenuSymbolImages.prefix, request.path.count == 1, let name = request.path[0].removingPercentEncoding {
             let key = MenuSymbolImages.prefix + "/" + name
             if let data = cache[key] { return PageResource(data: data, mimeType: "image/png") }
-            guard let data = MenuSymbolImages.png(name) else { return nil }
+            guard let data = MenuSymbolImages().png(name) else { return nil }
             cache[key] = data
             return PageResource(data: data, mimeType: "image/png")
         }
