@@ -5726,6 +5726,12 @@ function AcpmuxPane() {
         }),
       ),
     );
+  const moveChatToMachine = (machine: string) =>
+    void callNative("pane.moveToMachine", { machine }).catch(() =>
+      directClient.current?.notice(
+        translate("composer.offloadNotRun", { action: translate("composer.moveToCloud") }),
+      ),
+    );
   /// The Quick Composer panel (`"surface": "quick"` in the host's ready reply) or a tab's pane.
   const [surface, setSurface] = useState<PaneSurface>("pane");
   const quick = surface === "quick";
@@ -7757,7 +7763,7 @@ function AcpmuxPane() {
   // The header's state from the chat's tab (header/headerState.ts): read when a chat opens, then pushed
   // by the App on every change. Whether the panes beside the chat show ([+] New tab reads Hide tabs) also
   // follows the App's answer to the click.
-  const { sideTabs, pullRequest: headerPullRequest, moves } = useHeaderState();
+  const { sideTabs, pullRequest: headerPullRequest, moves, moveTargets } = useHeaderState();
   // The moves the chat's own right-click menu offers now: the composer's picker offers the same.
   const offloads = useMemo(
     () => (["move", "bringBack"] as const).filter((kind) => moves.includes(CONNECT_ACTIONS[kind])),
@@ -8126,7 +8132,8 @@ function AcpmuxPane() {
     );
   };
   // The title is a compact identity control. Keep its actions on the same existing paths as the
-  // header menu; a title click must never grow a second destructive or machine-transfer pipeline.
+  // header menu. Cloud targets come from the host's live MachineRegistry list and dispatch through
+  // the existing CloudMove action; there is no client-side machine inventory.
   const titleMenu = (): ChatMenuItem[] => {
     const rows = chatMenu();
     const row = (key: string) =>
@@ -8145,11 +8152,32 @@ function AcpmuxPane() {
           disabled: true,
           shortcutLabel: "A",
         };
-    const moveChildren = offloads.map((kind) => ({
-      key: kind,
-      label: t(kind === "move" ? "composer.moveToCloud" : "composer.bringBackLocal"),
-      onSelect: () => offloadChat(kind),
-    }));
+    const moveChildren = [
+      ...(moves.includes(CONNECT_ACTIONS.move)
+        ? moveTargets.length > 0
+          ? moveTargets.map((target) => ({
+              key: `machine:${target.id}`,
+              label: target.label,
+              onSelect: () => moveChatToMachine(target.id),
+            }))
+          : [
+              {
+                key: "move",
+                label: t("composer.moveToCloud"),
+                onSelect: () => offloadChat("move"),
+              },
+            ]
+        : []),
+      ...(moves.includes(CONNECT_ACTIONS.bringBack)
+        ? [
+            {
+              key: "bringBack",
+              label: t("composer.bringBackLocal"),
+              onSelect: () => offloadChat("bringBack"),
+            },
+          ]
+        : []),
+    ];
     return menuGroups(
       rename ? [{ ...rename, shortcutLabel: "R" }] : [],
       [
@@ -8166,8 +8194,9 @@ function AcpmuxPane() {
       [
         {
           key: "moveMachine",
-          label:
-            moveChildren.length === 1
+          label: moves.includes(CONNECT_ACTIONS.move)
+            ? t("chatMenu.moveToMachine")
+            : moveChildren.length === 1
               ? moveChildren[0]!.label
               : t("composer.environment"),
           icon: "machine.remote",

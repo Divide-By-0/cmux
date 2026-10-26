@@ -7,7 +7,7 @@
 // Files and Split Down; each while it applies). Before them, the chat branch's pull request with its
 // checks (cx-tcwj, Codex desktop's PR chip; PullRequestChip.tsx), when the App found one. Every control
 // renders from the first frame at its final size; data fills in place.
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { useT, type StringKey } from "../i18n";
 import { Icon } from "../icons/Icon";
 import { tooltipProps, useShortcut } from "../shortcuts";
@@ -88,10 +88,22 @@ function previewAddress(url: string): string {
 export type ChatMenuChild = {
   key: string;
   label: string;
+  disabled?: boolean;
   shortcutAction?: string;
   shortcutLabel?: string;
   onSelect: () => void;
 };
+
+type ShortcutMenuItem = Exclude<ChatMenuItem, "separator"> | ChatMenuChild;
+
+export function menuItemForShortcut(items: readonly (ChatMenuItem | ChatMenuChild)[], key: string): ShortcutMenuItem | undefined {
+  const normalized = key.length === 1 ? key.toUpperCase() : "";
+  if (!normalized) return undefined;
+  return items.find(
+    (item): item is ShortcutMenuItem =>
+      item !== "separator" && item.shortcutLabel?.toUpperCase() === normalized,
+  );
+}
 
 export function ChatHeaderTools({
   onTerminal,
@@ -581,11 +593,15 @@ export function ChatMenu({
   // Set when the palette asks for one row's children (Continue In…): the menu lists only those.
   const [only, setOnly] = useState<string>();
   const opening = useRef(0);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   const show = (row?: string) => {
     const generation = ++opening.current;
     const ready = () => {
       if (generation !== opening.current) return;
-      setRows(items());
+      // `onOpen` refreshes native state and may rerender before its promise settles. Read the
+      // latest factory after that await so a title menu never commits the previous chat's targets.
+      setRows(itemsRef.current());
       setOnly(row);
       setOpen(true);
     };
@@ -615,6 +631,17 @@ export function ChatMenu({
   };
   const focused = only ? rows.find((row) => row !== "separator" && row.key === only) : undefined;
   const children = focused && focused !== "separator" ? focused.children : undefined;
+  const shortcutRows = children ?? rows;
+  const onMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.key.length !== 1) return;
+    const key = event.key.toUpperCase();
+    const item = menuItemForShortcut(shortcutRows, key);
+    if (!item || item.disabled || !item.onSelect) return;
+    event.preventDefault();
+    event.stopPropagation();
+    item.onSelect();
+    setOpen(false);
+  };
   const buttonLabel = triggerLabel ?? label;
   return (
     <Menu open={open} onOpenChange={onOpenChange}>
@@ -626,7 +653,7 @@ export function ChatMenu({
       >
         {trigger ?? <Icon name="action.more.vertical" size={HEADER_GLYPH} />}
       </MenuButton>
-      <MenuPopup className="acpmux-chat-menu-popover" align="end">
+      <MenuPopup className="acpmux-chat-menu-popover" align="end" onKeyDown={onMenuKeyDown}>
         {children
           ? children.map((child) => <ChatMenuChildRow key={child.key} child={child} />)
           : rows.map((row, index) =>
@@ -675,7 +702,7 @@ function ChatMenuChildRow({ child }: { child: ChatMenuChild }) {
   const registeredShortcut = useShortcut(child.shortcutAction ?? "");
   const shortcut = child.shortcutLabel ?? registeredShortcut;
   return (
-    <MenuItem className="acpmux-chat-menu-item" onSelect={child.onSelect}>
+    <MenuItem className="acpmux-chat-menu-item" disabled={child.disabled} onSelect={child.onSelect}>
       <span className="acpmux-chat-menu-label">{child.label}</span>
       {shortcut && <kbd className="acpmux-chat-menu-key">{shortcut}</kbd>}
     </MenuItem>

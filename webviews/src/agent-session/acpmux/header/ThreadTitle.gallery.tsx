@@ -4,14 +4,17 @@ import type { Play } from "../../../gallery/play";
 import type { ChatMenuItem } from "./ChatHeaderTools";
 import { ThreadTitle } from "./ThreadTitle";
 
-const menuRows = (move: "local" | "cloud"): ChatMenuItem[] => [
+const menuRows = (move: "local" | "cloud", targets: readonly string[]): ChatMenuItem[] => [
   { key: "rename", label: "Rename", icon: "action.edit", shortcutAction: "renameTab", onSelect: () => undefined },
   { key: "fork", label: "Fork", icon: "agent.fork", shortcutAction: "chat.fork", onSelect: () => undefined },
   {
     key: "move",
     label: move === "local" ? "Move to Cloud" : "Bring Back Local",
     icon: "machine.remote",
-    children: [{ key: move, label: move === "local" ? "Move to Cloud" : "Bring Back Local", onSelect: () => undefined }],
+    children:
+      move === "local"
+        ? targets.map((label) => ({ key: label, label, onSelect: () => undefined }))
+        : [{ key: move, label: "Bring Back Local", onSelect: () => undefined }],
   },
   {
     key: "open",
@@ -27,18 +30,18 @@ const menuRows = (move: "local" | "cloud"): ChatMenuItem[] => [
   { key: "delete", label: "Delete", icon: "action.delete", onSelect: () => undefined },
 ];
 
-function TitleMenuGallery({ title, move, treatment }: { title: string; move: "local" | "cloud"; treatment: string }) {
+function TitleMenuGallery({ title, move, targets, treatment }: { title: string; move: "local" | "cloud"; targets: readonly string[]; treatment: string }) {
   return (
     <div className={`acpmux-shell acpmux-thread-title-gallery acpmux-thread-title-gallery--${treatment}`}>
       <header className="acpmux-header">
         <div className="acpmux-header-status-slot">
-          <ThreadTitle title={title} menu={() => menuRows(move)} />
+          <ThreadTitle title={title} menu={() => menuRows(move, targets)} />
         </div>
         <div className="acpmux-header-tools" />
       </header>
       <main className="acpmux-thread-title-gallery-copy">
         <p>Click the title to rename, fork, move or open this chat.</p>
-        <p className="acpmux-muted">Move uses the chat’s existing Cloud transfer path; Delete uses archive and closes the tab.</p>
+        <p className="acpmux-muted">Move uses the chat’s existing Cloud transfer path; Delete purges the session and closes the tab.</p>
       </main>
     </div>
   );
@@ -49,7 +52,7 @@ const open: Play = async (ctx) => {
   await ctx.waitFor(() => ctx.document.querySelector('[role="menu"]'));
 };
 
-export default componentEntry<{ title: string; move: "local" | "cloud"; treatment: string }>({
+export default componentEntry<{ title: string; move: "local" | "cloud"; targets: readonly string[]; treatment: string }>({
   id: "agent-pane.thread-title",
   title: "Chat title menu",
   area: "Agent pane",
@@ -65,12 +68,12 @@ export default componentEntry<{ title: string; move: "local" | "cloud"; treatmen
   load: async () => TitleMenuGallery,
   variants: {
     "local-plain": {
-      props: { title: "Phone to computer connection", move: "local", treatment: "plain" },
+      props: { title: "Phone to computer connection", move: "local", targets: ["Build Mac", "Review Mac"], treatment: "plain" },
       play: open,
-      note: "Local chat: Move to Cloud is the real transfer action, and Delete archives then closes the tab.",
+      note: "Local chat: the submenu lists eligible Cloud machines from the host, and Delete purges then closes the tab.",
     },
     "remote-glass": {
-      props: { title: "Review remote agent output", move: "cloud", treatment: "glass" },
+      props: { title: "Review remote agent output", move: "cloud", targets: [], treatment: "glass" },
       play: open,
       note: "Cloud chat: Bring Back Local uses the same existing transfer path as the environment picker.",
     },
@@ -78,6 +81,7 @@ export default componentEntry<{ title: string; move: "local" | "cloud"; treatmen
       props: {
         title: "Investigate the flaky reconnect path across the build fleet",
         move: "local",
+        targets: ["Build Mac"],
         treatment: "compact",
       },
       play: open,

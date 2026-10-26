@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { JSDOM } from "jsdom";
-import type { ChatMenuItem } from "./ChatHeaderTools";
+import { menuItemForShortcut, type ChatMenuItem } from "./ChatHeaderTools";
 import { ThreadTitle } from "./ThreadTitle";
 
 let dom: JSDOM | undefined;
@@ -56,8 +56,8 @@ afterEach(() => {
 });
 
 const rows = (): ChatMenuItem[] => [
-  { key: "rename", label: "Rename", icon: "action.edit", onSelect: () => undefined },
-  { key: "delete", label: "Delete", icon: "tab.close", disabled: true },
+  { key: "rename", label: "Rename", icon: "action.edit", shortcutLabel: "R", onSelect: () => undefined },
+  { key: "delete", label: "Delete", icon: "tab.close", disabled: true, shortcutLabel: "D" },
 ];
 
 test("the chat title is a labelled, keyboard-focusable menu trigger", async () => {
@@ -89,6 +89,20 @@ test("keeps a live menu factory across rerenders", async () => {
   await act(async () => {
     root!.render(<ThreadTitle title="A chat" menu={dynamicRows} />);
   });
-  expect(dynamicRows()[0]?.label).toBe("Fresh Rename");
+  const refreshedRow = dynamicRows()[0];
+  expect(refreshedRow !== "separator" ? refreshedRow.label : "").toBe("Fresh Rename");
 });
+
+test("resolves explicit title-menu shortcut letters", () => {
+  let selected = 0;
+  const item = menuItemForShortcut(
+    [{ key: "rename", label: "Rename", icon: "action.edit", shortcutLabel: "R", onSelect: () => selected++ }],
+    "r",
+  );
+  expect(item?.key).toBe("rename");
+  item?.onSelect?.();
+  expect(selected).toBe(1);
+  expect(menuItemForShortcut(rows(), "D")?.disabled).toBe(true);
+});
+
 
