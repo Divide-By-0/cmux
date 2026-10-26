@@ -39,10 +39,20 @@ type Dragging = { source: Drag; startY: number; dy: number; active: boolean; tar
 const sameSource = (a: Drag, b: Drag) =>
   a.from === "top" ? b.from === "top" && a.index === b.index : b.from === "child" && a.key === b.key;
 
+/** A row's SF Symbol (`symbol/<name>`, a template PNG) inked like the row's text: the image is an
+ * alpha mask over a `currentColor` rect, as a macOS menu draws its template icons. */
 function RowIcon({ symbol }: { symbol: string | null }) {
+  const mask = useId();
   if (!symbol) return <span className="menu-row-icon" aria-hidden="true" />;
-  const url = `url("symbol/${encodeURIComponent(encodeURIComponent(symbol))}")`;
-  return <span className="menu-row-icon" data-symbol={symbol} style={{ maskImage: url, WebkitMaskImage: url }} aria-hidden="true" />;
+  const href = `symbol/${encodeURIComponent(encodeURIComponent(symbol))}`;
+  return (
+    <svg className="menu-row-icon" data-symbol={symbol} viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <mask id={mask} style={{ maskType: "alpha" }}>
+        <image href={href} width="16" height="16" preserveAspectRatio="xMidYMid meet" />
+      </mask>
+      <rect width="16" height="16" fill="currentColor" mask={`url(#${mask})`} />
+    </svg>
+  );
 }
 
 /** A row's button: its tooltip names the action only; its accessible name adds the row. */

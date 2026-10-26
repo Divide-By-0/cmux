@@ -1766,8 +1766,9 @@ mark {
   padding: 5px;
   border: 1px solid var(--border-strong);
   border-radius: 9px;
-  background: var(--cmux-surface-solid, light-dark(rgba(246, 246, 246, 1), rgba(40, 40, 42, 1)));
-  box-shadow: 0 8px 24px light-dark(rgba(0, 0, 0, 0.12), rgba(0, 0, 0, 0.45));
+  /* A context menu's own surface (WebTheme's --surface-popup) and drop, so it reads as the menu. */
+  background: var(--surface-popup);
+  box-shadow: var(--ui-popup-drop);
   max-width: 420px;
   position: relative;
 }
@@ -1837,13 +1838,6 @@ mark {
   flex: none;
   width: 16px;
   height: 16px;
-  background: currentColor;
-  mask: center / contain no-repeat;
-  -webkit-mask: center / contain no-repeat;
-}
-
-.menu-row-icon:not([data-symbol]) {
-  background: none;
 }
 
 .menu-row-title {
@@ -1880,9 +1874,9 @@ button.menu-disclosure {
 
 .menu-separator .menu-separator-line {
   flex: 1;
-  height: 1px;
+  height: 0;
   margin: 0 6px;
-  background: var(--border-strong);
+  border-top: 1px solid var(--border-strong);
 }
 
 .menu-nested {
