@@ -2,6 +2,7 @@ import CmuxNextActions
 import CmuxNextDesign
 import CmuxNextPages
 import CmuxNextSettings
+import CmuxNextSettingsWindow
 import Foundation
 import Testing
 
@@ -57,6 +58,16 @@ import Testing
         #expect(registry.contextMenuLayouts[.workspaceRow] == nil)
         _ = try await route.call(ContextMenusPageProvider.prefix + "show_item", params: ["show": false], context: Self.click)
         #expect(route.hostJSON["show_customize_item"] == false)
+    }
+
+    /// A row's icon is `symbol/<name>` on the Settings page: the page serves that prefix (a 404
+    /// before, so every row drew without its icon) and the name draws as a PNG.
+    @Test func rowIconsAreServedOnTheSettingsPage() throws {
+        #expect(PageDescriptor.settings.dynamicPrefixes.contains(MenuSymbolImages.prefix))
+        let png = try #require(MenuSymbolImages().png("pencil"))
+        #expect(png.starts(with: [0x89, 0x50, 0x4E, 0x47]))
+        #expect(MenuSymbolImages().png("../etc/passwd") == nil)
+        #expect(MenuSymbolImages().png("no.such.symbol.anywhere") == nil)
     }
 
     @Test func onlyThePersonsClickOnSettingsWrites() async throws {
