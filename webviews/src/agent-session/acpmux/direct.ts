@@ -3968,6 +3968,10 @@ export class AcpmuxDirectClient {
   get selectedSession(): string | undefined {
     return this.selectedSessionId;
   }
+  /** Whether a purge owns the selected session's disappearance. */
+  get purgeInFlight(): boolean {
+    return this.purgingSessionId !== undefined;
+  }
   /** A copy of the selected session's recorded events, oldest first, for the inspector. */
   sessionEvents(): EventRecord[] {
     return this.events.slice();
@@ -5156,6 +5160,7 @@ export class AcpmuxDirectClient {
   leave(): void {
     const previous = this.selectedSessionId;
     if (!previous) return;
+    if (this.purgingSessionId === previous) this.purgingSessionId = undefined;
     this.selectedSessionId = undefined;
     this.selectionGeneration += 1;
     this.resetSessionState();

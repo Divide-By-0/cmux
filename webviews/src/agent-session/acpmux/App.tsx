@@ -7834,6 +7834,9 @@ function AcpmuxPane() {
     ) {
       deleteInFlight.current = undefined;
     }
+    if (deleteInFlight.current && snapshot.sessionId === undefined && !directClient.current?.purgeInFlight) {
+      deleteInFlight.current = undefined;
+    }
   }, [deleteConfirmSession, snapshot.sessionId, snapshot.summary?.harness]);
   const archive = archiveRow(
     {
