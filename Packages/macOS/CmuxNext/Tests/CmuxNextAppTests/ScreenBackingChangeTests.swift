@@ -72,7 +72,7 @@ struct ScreenBackingChangeTests {
 
         screen.view.canvasMagnify(by: CanvasCamera.zoomStep, at: center, ended: false)
 
-        #expect(screen.view.reconcilePasses == before, "the gesture re-entered reconcile (screen.view.reconcilePasses - before) times")
+        #expect(screen.view.reconcilePasses == before, "the gesture re-entered reconcile \(screen.view.reconcilePasses - before) times")
         #expect(!screen.view.isApplyingCamera)
     }
 }
