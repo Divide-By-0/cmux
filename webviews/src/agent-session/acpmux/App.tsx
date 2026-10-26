@@ -339,6 +339,7 @@ import { ImageViewerContext } from "./conversation/imageViewerContext";
 import { sessionLink } from "./links";
 import { ChatHeaderInlineStatus, ChatHeaderStatus } from "./header/ChatHeaderStatus";
 import { ChatHeaderTools, HEADER_ACTIONS, menuGroups, type ChatMenuItem } from "./header/ChatHeaderTools";
+import { ThreadTitle } from "./header/ThreadTitle";
 import { EnvironmentLine, environmentOpener } from "./header/EnvironmentLine";
 import { headerState, setHeaderState, useHeaderState } from "./header/headerState";
 import { setTabRow, tabRowStyle, useTabRow, useTabRowTools } from "./header/tabRow";
@@ -8120,6 +8121,82 @@ function AcpmuxPane() {
       ],
     );
   };
+  // The title is a compact identity control. Keep its actions on the same existing paths as the
+  // header menu; a title click must never grow a second destructive or machine-transfer pipeline.
+  const titleMenu = (): ChatMenuItem[] => {
+    const rows = chatMenu();
+    const row = (key: string) =>
+      rows.find(
+        (item): item is Exclude<ChatMenuItem, "separator"> => item !== "separator" && item.key === key,
+      );
+    const rename = row("rename");
+    const fork = row("fork");
+    const archive = row("archive");
+    const archiveItem = archive
+      ? { ...archive, shortcutLabel: "A" }
+      : {
+          key: "archive",
+          label: t("chatMenu.archive"),
+          icon: "inbox",
+          disabled: true,
+          shortcutLabel: "A",
+        };
+    const moveChildren = offloads.map((kind) => ({
+      key: kind,
+      label: t(kind === "move" ? "composer.moveToCloud" : "composer.bringBackLocal"),
+      onSelect: () => offloadChat(kind),
+    }));
+    return menuGroups(
+      rename ? [{ ...rename, shortcutLabel: "R" }] : [],
+      [
+        fork
+          ? { ...fork, shortcutLabel: "F" }
+          : {
+              key: "fork",
+              label: t("chatMenu.fork"),
+              icon: "agent.fork",
+              disabled: true,
+              shortcutLabel: "F",
+            },
+      ],
+      [
+        {
+          key: "moveMachine",
+          label: t("chatMenu.moveToMachine"),
+          icon: "machine.remote",
+          disabled: moveChildren.length === 0,
+          children: moveChildren,
+        },
+      ],
+      [
+        {
+          key: "openIn",
+          label: t("chatMenu.openIn"),
+          icon: "app.open.external",
+          children: [
+            { key: "browser", label: t("header.browser"), onSelect: newBrowser },
+            { key: "terminal", label: t("header.terminal"), onSelect: newTerminal },
+            {
+              key: "window",
+              label: t("chatMenu.newWindow"),
+              shortcutAction: HEADER_ACTIONS.newWindow,
+              onSelect: () => runHeaderAction(HEADER_ACTIONS.newWindow),
+            },
+          ],
+        },
+      ],
+      [archiveItem],
+      [
+        {
+          key: "delete",
+          label: t("chatMenu.delete"),
+          icon: "tab.close",
+          disabled: true,
+          shortcutLabel: "D",
+        },
+      ],
+    );
+  };
   // Before the handshake the New Tab frame shows (cx-0rpl.10) unless the host failed: then the
   // chat view's error card with Retry shows, as before.
   const showNewTab =
@@ -9533,7 +9610,14 @@ function AcpmuxPane() {
               >
                 <header className="acpmux-header" data-tab-row={inTabRow ? "" : undefined}>
                   <ChatHeaderStatus status={header.status} detail={header.detail}>
-                    {!inTabRow && environmentSurface.header && environmentLine(environmentSurface.compact)}
+                    {!inTabRow && (
+                      <div className="acpmux-header-status-content">
+                        {!showNewTab && snapshot.sessionId && (
+                          <ThreadTitle title={chatName} menu={titleMenu} onMenuOpen={readTabState} />
+                        )}
+                        {environmentSurface.header && environmentLine(environmentSurface.compact)}
+                      </div>
+                    )}
                   </ChatHeaderStatus>
                   <div className="acpmux-handoff-header-tools" ref={tabRowTools}>
                     <LivePresenceStack

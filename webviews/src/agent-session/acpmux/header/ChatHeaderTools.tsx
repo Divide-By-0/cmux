@@ -62,6 +62,9 @@ export type ChatMenuItem =
       icon: string;
       /// An app action id whose keycap the row shows.
       shortcutAction?: string;
+      /// A product-level key hint when the action has no registered host shortcut (for example, the
+      /// title menu's Rename R and Fork F, matching Claude Code's session menu).
+      shortcutLabel?: string;
       disabled?: boolean;
       onSelect?: () => void;
       children?: ChatMenuChild[];
@@ -82,7 +85,13 @@ function previewAddress(url: string): string {
 }
 
 /// A submenu row: its label, and the keycap of `shortcutAction` when it has one.
-export type ChatMenuChild = { key: string; label: string; shortcutAction?: string; onSelect: () => void };
+export type ChatMenuChild = {
+  key: string;
+  label: string;
+  shortcutAction?: string;
+  shortcutLabel?: string;
+  onSelect: () => void;
+};
 
 export function ChatHeaderTools({
   onTerminal,
@@ -540,12 +549,17 @@ function customizeItems(
   return items;
 }
 
-function ChatMenu({
+export function ChatMenu({
   items,
   disabled,
   onOpen,
   expand,
   onExpanded,
+  trigger,
+  triggerClassName,
+  triggerLabel,
+  triggerTitle,
+  registerPickerLabel,
 }: {
   items: () => ChatMenuItem[];
   /// No rows yet (Quick Chat before its session): the button stays, disabled.
@@ -553,6 +567,13 @@ function ChatMenu({
   onOpen?: () => Promise<unknown>;
   expand?: string;
   onExpanded?: () => void;
+  /// Optional trigger content for another header control (ThreadTitle); the menu behavior stays shared.
+  trigger?: ReactNode;
+  triggerClassName?: string;
+  triggerLabel?: string;
+  triggerTitle?: string;
+  /// `null` leaves this menu out of the picker registry (a title menu is not the header actions picker).
+  registerPickerLabel?: string | null;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -582,7 +603,11 @@ function ChatMenu({
   }, [expand, onExpanded]);
   // Automation and captures open it by its label, as a click does (see pickerOpeners.ts).
   const label = t("chatMenu.open");
-  useEffect(() => registerPicker(label, () => showRef.current()), [label]);
+  useEffect(() => {
+    const pickerLabel = registerPickerLabel === undefined ? label : registerPickerLabel;
+    if (pickerLabel === null) return;
+    return registerPicker(pickerLabel, () => showRef.current());
+  }, [label, registerPickerLabel]);
   const onOpenChange = (next: boolean) => {
     if (next) return show();
     opening.current++;
@@ -590,10 +615,16 @@ function ChatMenu({
   };
   const focused = only ? rows.find((row) => row !== "separator" && row.key === only) : undefined;
   const children = focused && focused !== "separator" ? focused.children : undefined;
+  const buttonLabel = triggerLabel ?? label;
   return (
     <Menu open={open} onOpenChange={onOpenChange}>
-      <MenuButton className="acpmux-header-tool" label={label} disabled={disabled}>
-        <Icon name="action.more.vertical" size={HEADER_GLYPH} />
+      <MenuButton
+        className={triggerClassName ?? "acpmux-header-tool"}
+        label={buttonLabel}
+        title={triggerTitle}
+        disabled={disabled}
+      >
+        {trigger ?? <Icon name="action.more.vertical" size={HEADER_GLYPH} />}
       </MenuButton>
       <MenuPopup className="acpmux-chat-menu-popover" align="end">
         {children
@@ -629,7 +660,8 @@ function ChatMenu({
 }
 
 function ChatMenuRow({ item }: { item: Exclude<ChatMenuItem, "separator"> }) {
-  const shortcut = useShortcut(item.shortcutAction ?? "");
+  const registeredShortcut = useShortcut(item.shortcutAction ?? "");
+  const shortcut = item.shortcutLabel ?? registeredShortcut;
   return (
     <MenuItem className="acpmux-chat-menu-item" disabled={item.disabled} onSelect={item.onSelect}>
       <Icon name={item.icon} size={15} />
@@ -640,7 +672,8 @@ function ChatMenuRow({ item }: { item: Exclude<ChatMenuItem, "separator"> }) {
 }
 
 function ChatMenuChildRow({ child }: { child: ChatMenuChild }) {
-  const shortcut = useShortcut(child.shortcutAction ?? "");
+  const registeredShortcut = useShortcut(child.shortcutAction ?? "");
+  const shortcut = child.shortcutLabel ?? registeredShortcut;
   return (
     <MenuItem className="acpmux-chat-menu-item" onSelect={child.onSelect}>
       <span className="acpmux-chat-menu-label">{child.label}</span>
