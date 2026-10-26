@@ -62,4 +62,17 @@ struct ScreenBackingChangeTests {
         #expect(abs(screen.view.bounds.width - 1200 / CanvasCamera.zoomStep) < 1, "the camera did not set the bounds: \(screen.view.bounds)")
         #expect(!screen.view.isApplyingCamera)
     }
+
+    @Test func aCanvasGestureSetsItsBoundsWithoutReenteringReconcile() {
+        let screen = Screen()
+        defer { screen.window.close() }
+        let center = CGPoint(x: 600, y: 400)
+        screen.showCanvas(CanvasCamera(center: center))
+        let before = screen.view.reconcilePasses
+
+        screen.view.canvasMagnify(by: CanvasCamera.zoomStep, at: center, ended: false)
+
+        #expect(screen.view.reconcilePasses == before, "the gesture re-entered reconcile (screen.view.reconcilePasses - before) times")
+        #expect(!screen.view.isApplyingCamera)
+    }
 }

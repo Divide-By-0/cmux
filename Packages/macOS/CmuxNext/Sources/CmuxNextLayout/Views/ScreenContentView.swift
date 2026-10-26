@@ -148,7 +148,6 @@ final class ScreenContentView: NSView {
     /// reconciling there set the bounds again and recursed until the stack overflowed (Crash D, #24998).
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
-        guard !isApplyingCamera, window != nil, reconciledScale != scale else { return }
         reconcileAndScroll()
     }
 
