@@ -25,14 +25,12 @@ final class SettingsWindowService: InternalPageProvider {
         self.services = services
     }
 
-    /// Settings > Menus with `context`'s menu selected. Each open is a new route (`open`, which the
-    /// page ignores), so Customize Menu… selects its menu again after the person picked another.
-    static func menusRoute(_ context: ActionMenuContext) -> String {
+    /// Customize Menu…: Settings > Menus with `context`'s menu selected. Each open is a new route
+    /// (`open`, which the page ignores), so it selects its menu again after the person picked another.
+    func showMenus(_ context: ActionMenuContext) {
         menusOpens += 1
-        return "#/settings/menus?focus=\(context.rawValue)&open=\(menusOpens)"
+        try? show(section: nil, route: "#/settings/menus?focus=\(context.rawValue)&open=\(menusOpens)")
     }
-
-    private static var menusOpens = 0
 
     /// The window whose tab shows Settings, if any.
     var window: NSWindow? {
@@ -41,6 +39,8 @@ final class SettingsWindowService: InternalPageProvider {
 
     /// The kept React page (a reopen shows it again with no reload); nil before the first show.
     private var webPage: PageWebView?
+    /// Customize Menu… opens so far (``showMenus(_:)``).
+    private var menusOpens = 0
     /// The route the next page view opens on.
     private var pendingRoute: String?
     /// A show that waits for a main window with a workspace.
