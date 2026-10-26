@@ -181,6 +181,7 @@ extension AgentPaneModel {
         case .moveToMachine(let machineID):
             guard newTab == nil, let header,
                   header.moveTargets().contains(where: { $0.id == machineID }),
+                  transport.gestures.consume(),
                   header.moveToMachine(machineID) else {
                 return AgentPaneReply.failure(code: "unavailable", message: "This chat cannot move to that machine.")
             }

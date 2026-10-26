@@ -114,6 +114,9 @@ extension AgentTabStore {
             // CloudMove can route only to a Cloud session. Paused machines remain eligible because
             // the existing transfer path resumes them; failed and destroyed records are omitted.
             return services.machines.cloud.compactMap { machine in
+                // The app-server link is a single app-owned socket. CloudMove's transfer path
+                // requires a second CLI daemon connection and explicitly rejects app-linked targets.
+                guard machine.appLink == nil else { return nil }
                 switch machine.machine.status {
                 case .running, .provisioning, .paused:
                     return AgentPaneMoveTarget(id: machine.machineID, label: machine.machine.title,
