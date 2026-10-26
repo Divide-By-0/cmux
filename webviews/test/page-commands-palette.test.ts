@@ -39,6 +39,30 @@ await requireBrowserLane("page-commands-palette.test.ts", async () => {
             },
           ),
         ],
+        // A Bash call Claude ran in the background: its result is only the launch.
+        [
+          "in",
+          "tool_call",
+          update({
+            sessionUpdate: "tool_call",
+            toolCallId: "bg1",
+            title: "npm run dev",
+            kind: "execute",
+            status: "in_progress",
+            rawInput: { command: "npm run dev", run_in_background: true },
+            _meta: { claude: { tool: "Bash" } },
+          }),
+        ],
+        [
+          "in",
+          "tool_call_update",
+          update({
+            sessionUpdate: "tool_call_update",
+            toolCallId: "bg1",
+            status: "completed",
+            content: [{ type: "content", content: { type: "text", text: "Command running in background with ID: bg1" } }],
+          }),
+        ],
         [
           "in",
           "background_task_update",
