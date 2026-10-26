@@ -159,19 +159,27 @@ import type { DiffFindHandle } from "./changes/diffFind";
 import { Inspector, type ExportOutcome } from "./Inspector";
 import { SummaryButton } from "./summary/SummaryButton";
 import { SummaryCard } from "./summary/SummaryCard";
-import { transcriptBackground } from "./summary/sessionSummary";
+import { type SummaryBackgroundTask, transcriptBackground } from "./summary/sessionSummary";
 import { useChatInspector } from "./inspector/ChatInspector";
 import { environmentToSave } from "./inspector/EnvironmentSection";
 import {
   type BackgroundCommand,
   backgroundCommands,
   backgroundSection,
+  type InspectorProcess,
+  inspectorLists,
   type ProcessSource,
   useProcessRegistry,
 } from "./inspector/processes";
 import { useInspectorOpen } from "./inspector/inspectorState";
 import { openCommand, opensProcessTerminal } from "./processTerminal";
-import { descendants, subagentChangesFolder, subagentProcesses, type SubagentScope } from "./inspector/subagentScope";
+import {
+  descendants,
+  subagentChangesFolder,
+  subagentProcesses,
+  withChatEnds,
+  type SubagentScope,
+} from "./inspector/subagentScope";
 import { pendingToolCalls, waitingSubagents } from "./summary/SubagentStatusList";
 import { AgentsPill } from "./subagents/AgentsPill";
 import { SubagentTray } from "./subagents/SubagentTray";
@@ -5834,12 +5842,27 @@ function AcpmuxPane() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- a new scope only when what it shows changes
   }, [scopedKey, scopedRows, chatName, chatAgents]);
-  // A subagent's view: what its Session Info lists in Background tasks, from its own rows.
+  // How many rows Session Info's Background tasks lists for the view on screen, read as it reads
+  // them (inspectorLists drops a transcript shell the registry no longer lists): a subagent's view
+  // from its own rows (none yet: empty) and processes, with how its shells ended in the chat's rows
+  // (inspector/subagentScope.ts); the chat's view from its own, with its workflows.
   const registryProcesses = processRegistry.processes;
-  const scopedWork = useMemo(() => {
-    if (!scopedKey || !scopedRows) return undefined;
-    return { ...transcriptBackground(scopedRows), processes: subagentProcesses(registryProcesses, scopedRows).length };
-  }, [scopedKey, scopedRows, registryProcesses]);
+  const registryListed = processRegistry.listed;
+  const scopedOwn = useMemo(
+    () => (scopedKey ? transcriptBackground(scopedRows ?? []) : undefined),
+    [scopedKey, scopedRows],
+  );
+  const chatRows = snapshot.rows;
+  const scopedTasks = useMemo(() => scopedOwn && withChatEnds(scopedOwn.tasks, chatRows), [scopedOwn, chatRows]);
+  const backgroundRows = useMemo(() => {
+    const count = (processes: readonly InspectorProcess[], tasks: readonly SummaryBackgroundTask[]) => {
+      const { servers, tasks: commands } = inspectorLists(processes, tasks, registryListed);
+      return servers.length + commands.length;
+    };
+    if (scopedOwn && scopedTasks)
+      return count(subagentProcesses(registryProcesses, scopedRows ?? []), scopedTasks) + scopedOwn.scheduled;
+    return count(registryProcesses, transcriptWork.tasks) + transcriptWork.scheduled + workflows.length;
+  }, [scopedOwn, scopedTasks, scopedRows, registryProcesses, registryListed, transcriptWork, workflows.length]);
   // The Inspector (Debug Settings `agent.inspector`): its toggle the first of the header's
   // top-right icons, the panel beside or over the chat. On, it takes the summary card's place.
   const inspectorSummary = snapshot.summary;
@@ -7865,9 +7888,6 @@ function AcpmuxPane() {
   // chat's view its own and the chat's workflows and started chats.
   const revealSection = inspector.reveal;
   const listedAgents = inspectorSubagent ? inspectorSubagent.agents.length : trayAgents.length + childSessions.length;
-  const backgroundRows = scopedWork
-    ? scopedWork.processes + scopedWork.tasks.length + scopedWork.scheduled
-    : processRegistry.processes.length + transcriptWork.tasks.length + transcriptWork.scheduled + workflows.length;
   if (revealSection && listedAgents > 0)
     commands.showSubagents = () => {
       if (live()) revealSection("subagents");
