@@ -159,7 +159,7 @@ import type { DiffFindHandle } from "./changes/diffFind";
 import { Inspector, type ExportOutcome } from "./Inspector";
 import { SummaryButton } from "./summary/SummaryButton";
 import { SummaryCard } from "./summary/SummaryCard";
-import { runningBackgroundTasks } from "./summary/sessionSummary";
+import { transcriptBackground } from "./summary/sessionSummary";
 import { useChatInspector } from "./inspector/ChatInspector";
 import { environmentToSave } from "./inspector/EnvironmentSection";
 import {
@@ -171,7 +171,7 @@ import {
 } from "./inspector/processes";
 import { useInspectorOpen } from "./inspector/inspectorState";
 import { openCommand, opensProcessTerminal } from "./processTerminal";
-import { descendants, subagentChangesFolder, type SubagentScope } from "./inspector/subagentScope";
+import { descendants, subagentChangesFolder, subagentProcesses, type SubagentScope } from "./inspector/subagentScope";
 import { pendingToolCalls, waitingSubagents } from "./summary/SubagentStatusList";
 import { AgentsPill } from "./subagents/AgentsPill";
 import { SubagentTray } from "./subagents/SubagentTray";
@@ -5197,7 +5197,12 @@ function AcpmuxPane() {
   // arrives). The one registry for the pane: the Inspector, the card, the tray and the counts all
   // read it. The tray shows a registry command between turns while the hook knows it runs; a quiet
   // chat sends no `_acpmux/process/list`.
-  const transcriptRunning = useMemo(() => runningBackgroundTasks(snapshot.rows), [snapshot.rows]);
+  // The same pass finds what Session Info's Background tasks lists (the palette's Show Background Tasks).
+  const transcriptWork = useMemo(() => transcriptBackground(snapshot.rows), [snapshot.rows]);
+  const transcriptRunning = useMemo(
+    () => transcriptWork.tasks.filter((task) => task.state === "running"),
+    [transcriptWork],
+  );
   const inspectorOn = useHeaderState().inspector;
   const inspectorOpened = useInspectorOpen(shownSessionId);
   const processRegistry = useProcessRegistry(
@@ -5829,6 +5834,12 @@ function AcpmuxPane() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- a new scope only when what it shows changes
   }, [scopedKey, scopedRows, chatName, chatAgents]);
+  // A subagent's view: what its Session Info lists in Background tasks, from its own rows.
+  const registryProcesses = processRegistry.processes;
+  const scopedWork = useMemo(() => {
+    if (!scopedKey || !scopedRows) return undefined;
+    return { ...transcriptBackground(scopedRows), processes: subagentProcesses(registryProcesses, scopedRows).length };
+  }, [scopedKey, scopedRows, registryProcesses]);
   // The Inspector (Debug Settings `agent.inspector`): its toggle the first of the header's
   // top-right icons, the panel beside or over the chat. On, it takes the summary card's place.
   const inspectorSummary = snapshot.summary;
@@ -7841,22 +7852,30 @@ function AcpmuxPane() {
   if (!quick && (previewUrl || litSplits.includes(HEADER_ACTIONS.preview)))
     commands.togglePreview = () => togglePreview(previewUrl);
   // Ctrl-B's move, while it has something to move; queueing's toggle, as a queued row's ⋯ menu has it.
-  // During a switch's hold the page still draws chat A while the client already selected B: the
-  // move waits for B to show, so A's command never moves B's work.
+  // During a switch's hold the page still draws chat A while the client already selected B: a
+  // command waits for B to show, so A's never moves B's work or opens B's Session Info.
+  const live = () => directClient.current?.selectedSession === snapshotRef.current?.sessionId;
   if (!quick && (foreground.length > 0 || foregroundAgent))
     commands.runInBackground = () => {
-      if (directClient.current?.selectedSession === snapshotRef.current?.sessionId) runInBackground();
+      if (live()) runInBackground();
     };
   commands.toggleQueueing = () => setQueueing(!queueingOn());
-  // Session Info opened at a section, while the Inspector has rows there: a subagent's view lists
-  // its own subagents. Background tasks counts what the pane holds without reading its rows (the
-  // registry's servers and commands, the transcript's running ones, the workflows); finished and
-  // scheduled entries come from the Inspector's summary, which it reads only while drawn.
+  // Session Info opened at a section, while it lists rows there for the view on screen: a subagent's
+  // view lists its own subagents, processes and transcript work (inspector/subagentScope.ts), the
+  // chat's view its own and the chat's workflows and started chats.
   const revealSection = inspector.reveal;
   const listedAgents = inspectorSubagent ? inspectorSubagent.agents.length : trayAgents.length + childSessions.length;
-  if (revealSection && listedAgents > 0) commands.showSubagents = () => revealSection("subagents");
-  if (revealSection && processRegistry.processes.length + transcriptRunning.length + workflows.length > 0)
-    commands.showBackgroundTasks = () => revealSection("tasks");
+  const backgroundRows = scopedWork
+    ? scopedWork.processes + scopedWork.tasks.length + scopedWork.scheduled
+    : processRegistry.processes.length + transcriptWork.tasks.length + transcriptWork.scheduled + workflows.length;
+  if (revealSection && listedAgents > 0)
+    commands.showSubagents = () => {
+      if (live()) revealSection("subagents");
+    };
+  if (revealSection && backgroundRows > 0)
+    commands.showBackgroundTasks = () => {
+      if (live()) revealSection("tasks");
+    };
   paletteCommands.current = commands;
   const commandNames = Object.keys(commands).sort().join(" ");
   // Again for every client: the host's handshake (a reconnect's too) forgets the list, and a new

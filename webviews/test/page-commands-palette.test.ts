@@ -60,7 +60,9 @@ await requireBrowserLane("page-commands-palette.test.ts", async () => {
             sessionUpdate: "tool_call_update",
             toolCallId: "bg1",
             status: "completed",
-            content: [{ type: "content", content: { type: "text", text: "Command running in background with ID: bg1" } }],
+            content: [
+              { type: "content", content: { type: "text", text: "Command running in background with ID: bg1" } },
+            ],
           }),
         ],
         [
@@ -224,11 +226,12 @@ await requireBrowserLane("page-commands-palette.test.ts", async () => {
           throw new Error(`offered ${String(last)}`, { cause: error });
         },
       );
+      // Each command reveals its section: scrolled to and lit for a moment (inspector.css `[data-revealed]`).
       const shown = page.locator('aside.acpmux-chat-inspector[data-presence="shown"]');
       await page.evaluate(() => window.cmuxAcpmuxBridge!.command!("showBackgroundTasks"));
-      await shown.locator('[data-section="tasks"]').first().waitFor({ timeout: 10_000 });
+      await shown.locator('[data-section="tasks"][data-revealed]').first().waitFor({ timeout: 10_000 });
       await page.evaluate(() => window.cmuxAcpmuxBridge!.command!("showSubagents"));
-      await shown.locator('[data-section="subagents"]').first().waitFor({ timeout: 10_000 });
+      await shown.locator('[data-section="subagents"][data-revealed]').first().waitFor({ timeout: 10_000 });
     } finally {
       await page.close();
     }
