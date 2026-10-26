@@ -7,7 +7,8 @@ import { installDom } from "./testDom";
 
 const restore = installDom();
 afterAll(() => restore());
-const { renderPage, settle, click, fire, ops } = await import("./testing");
+const { renderPage, settle, click, ops } = await import("./testing");
+const { act } = await import("react");
 
 type Layout = { top: string[]; more: string[]; hidden: string[] };
 const SET = "cmux.settings.context_menus.set";
@@ -97,21 +98,80 @@ test("separators add and go, and Reset brings back the app's menu", async () => 
   page.unmount();
 });
 
-test("dragging a row onto another puts it before that row; onto More, into More", async () => {
+/** Lays the top-level rows out 24 px apart from y = 100, as the page draws them (jsdom has no layout). */
+function layOut(container: HTMLElement) {
+  const list = editor(container).querySelector<HTMLElement>(".menu-preview")!;
+  const box = (top: number) => () => ({ top, bottom: top + 24, left: 0, right: 400, width: 400, height: 24, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+  list.getBoundingClientRect = box(100);
+  list.querySelectorAll<HTMLElement>(":scope > [data-top-index]").forEach((element, position) => {
+    element.getBoundingClientRect = box(100 + position * 24);
+  });
+}
+const rowY = (container: HTMLElement, key: string) =>
+  [...editor(container).querySelectorAll<HTMLElement>(".menu-preview > [data-top-index]")].findIndex((element) => element.dataset.key === key) * 24 + 100;
+
+/** Presses `key`'s grip, moves the pointer to `y`, then releases: the person's drag. */
+async function dragRow(container: HTMLElement, key: string, y: number, check?: () => void) {
+  layOut(container);
+  const grip = row(container, key).querySelector<HTMLElement>(".menu-row-grip")!;
+  const pointer = (type: string, clientY: number) =>
+    act(async () => {
+      grip.dispatchEvent(new window.MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientY }));
+    });
+  const start = rowY(container, key) + 12;
+  await pointer("pointerdown", start);
+  await pointer("pointermove", start + (y > start ? 6 : -6));
+  await pointer("pointermove", y);
+  check?.();
+  await pointer("pointerup", y);
+  await settle();
+}
+
+test("dragging a row's grip moves it where the line shows, with no HTML5 drag", async () => {
   const page = await renderPage({ path: "/settings/menus?focus=terminalSelection" });
   await settle();
-  await fire(row(page.container, "clearTerminal"), "dragstart");
-  await fire(row(page.container, "copy"), "dragover");
-  await fire(row(page.container, "copy"), "drop");
+  expect(row(page.container, "copy").getAttribute("draggable")).toBeNull();
+  // Clear Terminal (the last row) dragged above Copy: one drop line, above Copy, while dragging.
+  await dragRow(page.container, "clearTerminal", 102, () => {
+    const lines = editor(page.container).querySelectorAll<HTMLElement>("[data-drop-line]");
+    expect(lines.length).toBe(1);
+    expect(lines[0]!.style.transform).toBe("translateY(0px)");
+    expect(row(page.container, "clearTerminal").hasAttribute("data-dragging")).toBe(true);
+  });
   expect(lastSaved(page.provider).layout?.top.slice(0, 2)).toEqual(["clearTerminal", "copy"]);
+  expect(editor(page.container).querySelector("[data-drop-line]")).toBeNull();
+  // A row dropped back where it started saves nothing.
+  const before = ops(page.provider, SET).length;
+  await dragRow(page.container, "paste", rowY(page.container, "paste") + 12);
+  expect(ops(page.provider, SET).length).toBe(before);
+  page.unmount();
+});
 
-  const workspace = await renderPage({ path: "/settings/menus?focus=workspaceRow" });
+test("dragging a row onto the middle of More moves it into More", async () => {
+  const page = await renderPage({ path: "/settings/menus?focus=workspaceRow" });
   await settle();
-  await fire(row(workspace.container, "palette.toggleWorkspacePin"), "dragstart");
-  await fire(row(workspace.container, "folder:more"), "dragover");
-  await fire(row(workspace.container, "folder:more"), "drop");
-  expect(lastSaved(workspace.provider).layout?.more).toEqual(["palette.toggleWorkspacePin"]);
-  workspace.unmount();
+  const more = rowY(page.container, "folder:more") + 12;
+  await dragRow(page.container, "renameWorkspace", more, () => {
+    expect(row(page.container, "folder:more").hasAttribute("data-drop-into")).toBe(true);
+  });
+  expect(lastSaved(page.provider).layout?.more).toEqual(["renameWorkspace"]);
+  page.unmount();
+});
+
+test("a row of More dragged to the top level lands where it is dropped", async () => {
+  const page = await renderPage({ path: "/settings/menus?focus=workspaceRow" });
+  await settle();
+  await dragRow(page.container, "workspace.copyPath", 102);
+  expect(lastSaved(page.provider).layout?.top[0]).toBe("workspace.copyPath");
+  page.unmount();
+});
+
+test("a row button's tooltip names only its action", async () => {
+  const page = await renderPage({ path: "/settings/menus?focus=workspaceRow" });
+  await settle();
+  const moveToMore = button(row(page.container, "renameWorkspace"), "Move to More");
+  expect(moveToMore.title).toBe("Move to More");
+  expect(moveToMore.getAttribute("aria-label")).toBe("Move to More: Rename Workspace…");
   page.unmount();
 });
 

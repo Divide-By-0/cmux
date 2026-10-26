@@ -1,13 +1,15 @@
 // Settings > Menus: every right-click menu, arranged by the person (Swift `ContextMenuLayout`,
 // cmux.json `contextMenus`). The list names each menu; the editor draws the chosen menu's top
 // level as a menu, with More and the other submenus open beneath their rows. Rows reorder by
-// drag or by their buttons, move into More or out of any submenu to the top level, hide, and take
+// dragging their grip (menuDrag.ts: pointer events, so the save is the person's gesture) or by
+// their buttons, move into More or out of any submenu to the top level, hide, and take
 // separators; Reset brings back the app's own menu. Customize Menu… at the end of a menu opens
 // this page on it (`?focus=<menu>`).
-import { useId, useState, type DragEvent, type ReactNode } from "react";
+import { useId, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { useSettingsRouter, useSettingsState, useStore } from "../context";
 import { Switch } from "../editors/ToggleEditor";
 import { Icon } from "../icons";
+import { DRAG_THRESHOLD, dropTarget, isNoMove, lineOffset, rowBoxes, type DropTarget } from "../menuDrag";
 import {
   MORE,
   addSeparator,
@@ -31,27 +33,43 @@ const AREAS = ["workspace", "tabs", "terminal", "browser", "other"] as const;
 /** What a drag carries: a top-level entry by index, or a row from More or a submenu by key. */
 type Drag = { from: "top"; index: number } | { from: "child"; key: string };
 
+/** A press on a grip: a drag once the pointer travels `DRAG_THRESHOLD`; where it would drop. */
+type Dragging = { source: Drag; startY: number; dy: number; active: boolean; target: DropTarget | null; line: number | null };
+
+const sameSource = (a: Drag, b: Drag) =>
+  a.from === "top" ? b.from === "top" && a.index === b.index : b.from === "child" && a.key === b.key;
+
 function RowIcon({ symbol }: { symbol: string | null }) {
   if (!symbol) return <span className="menu-row-icon" aria-hidden="true" />;
   const url = `url("symbol/${encodeURIComponent(encodeURIComponent(symbol))}")`;
   return <span className="menu-row-icon" data-symbol={symbol} style={{ maskImage: url, WebkitMaskImage: url }} aria-hidden="true" />;
 }
 
+/** A row's button: its tooltip names the action only; its accessible name adds the row. */
 function ActionButton({
   icon,
-  label,
+  action,
+  row,
   onClick,
   disabled = false,
   iconClass,
 }: {
   icon: string;
-  label: string;
+  action: string;
+  row?: string;
   onClick: () => void;
   disabled?: boolean;
   iconClass?: string;
 }) {
   return (
-    <button type="button" className="icon-button" aria-label={label} title={label} disabled={disabled} onClick={onClick}>
+    <button
+      type="button"
+      className="icon-button"
+      aria-label={row ? `${action}: ${row}` : action}
+      title={action}
+      disabled={disabled}
+      onClick={onClick}
+    >
       <Icon name={icon} className={iconClass} />
     </button>
   );
@@ -66,8 +84,8 @@ export function ContextMenusCard({ focus }: { focus: string | null }) {
   const [pending, setPending] = useState<{ menu: string; layout: MenuLayout } | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [open, setOpen] = useState<Set<string>>(() => new Set([MORE]));
-  const [drag, setDrag] = useState<Drag | null>(null);
-  const [dropAt, setDropAt] = useState<string | null>(null);
+  const [dragging, setDragging] = useState<Dragging | null>(null);
+  const list = useRef<HTMLOListElement>(null);
   if (!state || state.menus.length === 0) return null;
 
   // The chosen menu is the route's focus: Customize Menu… opens `?focus=<menu>`, and picking a menu
@@ -95,55 +113,63 @@ export function ContextMenusCard({ focus }: { focus: string | null }) {
       return next;
     });
 
-  const endDrag = () => {
-    setDrag(null);
-    setDropAt(null);
+  /** Drops `source` on `target`: into More, or before top-level index `slot`. */
+  const commit = (source: Drag, target: DropTarget) => {
+    if ("intoMore" in target) {
+      const key = source.from === "top" ? layout.top[source.index] : source.key;
+      if (key && key !== "-" && key !== MORE) save(demote(layout, key));
+    } else if (source.from === "top") {
+      if (!isNoMove(source.index, target.slot)) save(moveTop(layout, source.index, source.index < target.slot ? target.slot - 1 : target.slot));
+    } else save(promote(menu, layout, source.key, target.slot));
   };
-  const dropTarget = (id: string, onDrop: (drag: Drag) => void) => ({
-    "data-drop": dropAt === id ? "" : undefined,
-    onDragOver: (event: DragEvent) => {
-      if (!drag) return;
+  /** A grip's pointer handlers: capture on press, follow the pointer, save on release. */
+  const grip = (source: Drag) => ({
+    onPointerDown: (event: PointerEvent<HTMLElement>) => {
+      if (event.button !== 0) return;
       event.preventDefault();
-      if (dropAt !== id) setDropAt(id);
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      setDragging({ source, startY: event.clientY, dy: 0, active: false, target: null, line: null });
     },
-    onDragLeave: () => setDropAt((current) => (current === id ? null : current)),
-    onDrop: (event: DragEvent) => {
-      event.preventDefault();
-      if (drag) onDrop(drag);
-      endDrag();
+    onPointerMove: (event: PointerEvent<HTMLElement>) => {
+      const element = list.current;
+      if (!dragging || !sameSource(dragging.source, source) || !element) return;
+      const dy = event.clientY - dragging.startY;
+      if (!dragging.active && Math.abs(dy) < DRAG_THRESHOLD) return;
+      const rows = rowBoxes(element);
+      const moving = source.from === "top" ? layout.top[source.index] : source.key;
+      const canEnterMore = hasMore && moving !== MORE && moving !== "-";
+      let target: DropTarget | null = dropTarget(rows, event.clientY, layout.top.length, canEnterMore);
+      if ("slot" in target && source.from === "top" && isNoMove(source.index, target.slot)) target = null;
+      const line = target ? lineOffset(rows, target, element.getBoundingClientRect().top) : null;
+      setDragging({ ...dragging, dy, active: true, target, line });
     },
+    onPointerUp: () => {
+      const done = dragging;
+      setDragging(null);
+      if (done?.active && done.target) commit(done.source, done.target);
+    },
+    onPointerCancel: () => setDragging(null),
   });
-  const dragSource = (source: Drag) => ({
-    draggable: true,
-    "data-dragging": drag && JSON.stringify(drag) === JSON.stringify(source) ? "" : undefined,
-    onDragStart: (event: DragEvent) => {
-      // A synthetic drag (tests, automation) carries no data transfer.
-      const transfer = event.dataTransfer as DataTransfer | null;
-      if (transfer) {
-        transfer.effectAllowed = "move";
-        transfer.setData("text/plain", source.from === "top" ? String(source.index) : source.key);
-      }
-      setDrag(source);
-    },
-    onDragEnd: endDrag,
-  });
-  /** Drops `dragged` before top-level position `index`. */
-  const insertAt = (dragged: Drag, index: number) => {
-    if (dragged.from === "top") save(moveTop(layout, dragged.index, dragged.index < index ? index - 1 : index));
-    else save(promote(menu, layout, dragged.key, index));
-  };
+  /** A dragged row follows the pointer; the rest stay put, so nothing reflows mid-drag. */
+  const lifted = (source: Drag) =>
+    dragging?.active && sameSource(dragging.source, source)
+      ? { "data-dragging": "", style: { transform: `translateY(${dragging.dy}px)` } }
+      : {};
+  const gripHandle = (source: Drag) => (
+    <span className="menu-row-grip" aria-hidden="true" {...grip(source)}>
+      <Icon name="grip" />
+    </span>
+  );
 
   const childRow = (row: MenuRow) => (
-    <li key={row.key} className="menu-row menu-child" data-key={row.key} {...dragSource({ from: "child", key: row.key })}>
-      <span className="menu-row-grip" aria-hidden="true">
-        <Icon name="grip" />
-      </span>
+    <li key={row.key} className="menu-row menu-child" data-key={row.key} {...lifted({ from: "child", key: row.key })}>
+      {gripHandle({ from: "child", key: row.key })}
       <RowIcon symbol={row.symbol} />
       <span className="menu-row-title">{row.title}</span>
       {row.kind !== "item" && <span className="menu-row-chevron" aria-hidden="true">›</span>}
       <span className="menu-row-actions">
-        <ActionButton icon="arrow.up.to.line" label={`${t("settingsWindow.menus.moveToTop")} ${row.title}`} onClick={() => save(promote(menu, layout, row.key))} />
-        <ActionButton icon="eye.slash" label={`${t("settingsWindow.menus.hide")} ${row.title}`} onClick={() => save(hide(layout, row.key))} />
+        <ActionButton icon="arrow.up.to.line" action={t("settingsWindow.menus.moveToTop")} row={row.title} onClick={() => save(promote(menu, layout, row.key))} />
+        <ActionButton icon="eye.slash" action={t("settingsWindow.menus.hide")} row={row.title} onClick={() => save(hide(layout, row.key))} />
       </span>
     </li>
   );
@@ -166,24 +192,24 @@ export function ContextMenusCard({ focus }: { focus: string | null }) {
   };
 
   const topRow = (item: TopItem, position: number, count: number) => {
+    const title = item.kind === "row" ? item.row.title : t("settingsWindow.menus.separator");
     const up = (
-      <ActionButton icon="chevron" iconClass="icon-up" label={t("settingsPage.moveUp")} disabled={position === 0} onClick={() => save(moveTop(layout, item.index, item.index - 1))} />
+      <ActionButton icon="chevron" iconClass="icon-up" action={t("settingsPage.moveUp")} row={title} disabled={position === 0} onClick={() => save(moveTop(layout, item.index, item.index - 1))} />
     );
     const down = (
-      <ActionButton icon="chevron" label={t("settingsPage.moveDown")} disabled={position === count - 1} onClick={() => save(moveTop(layout, item.index, item.index + 1))} />
+      <ActionButton icon="chevron" action={t("settingsPage.moveDown")} row={title} disabled={position === count - 1} onClick={() => save(moveTop(layout, item.index, item.index + 1))} />
     );
+    const source: Drag = { from: "top", index: item.index };
     if (item.kind === "separator") {
       const id = `sep-${item.index}`;
       return (
-        <li key={id} className="menu-row menu-separator" data-index={item.index} {...dragSource({ from: "top", index: item.index })} {...dropTarget(id, (dragged) => insertAt(dragged, item.index))}>
-          <span className="menu-row-grip" aria-hidden="true">
-            <Icon name="grip" />
-          </span>
+        <li key={id} className="menu-row menu-separator" data-top-index={item.index} {...lifted(source)}>
+          {gripHandle(source)}
           <span className="menu-separator-line" aria-label={t("settingsWindow.menus.separator")} role="separator" />
           <span className="menu-row-actions">
             {up}
             {down}
-            <ActionButton icon="xmark" label={t("settingsWindow.menus.removeSeparator")} onClick={() => save(removeSeparator(layout, item.index))} />
+            <ActionButton icon="xmark" action={t("settingsWindow.menus.removeSeparator")} onClick={() => save(removeSeparator(layout, item.index))} />
           </span>
         </li>
       );
@@ -192,19 +218,18 @@ export function ContextMenusCard({ focus }: { focus: string | null }) {
     const folder = row.kind === "folder";
     const isMore = row.key === MORE;
     const expanded = folder && open.has(row.key);
-    // Dropping a row on More moves it into More; on any other row, before that row.
-    const onDrop = (dragged: Drag) => {
-      if (isMore && dragged.from === "top" && layout.top[dragged.index] !== MORE) {
-        const key = layout.top[dragged.index]!;
-        if (key !== "-") save(demote(layout, key));
-      } else insertAt(dragged, item.index);
-    };
+    const intoMore = isMore && dragging?.active === true && dragging.target !== null && "intoMore" in dragging.target;
     return (
       <FragmentRows key={row.key}>
-        <li className="menu-row" data-key={row.key} data-folder={folder ? "" : undefined} {...dragSource({ from: "top", index: item.index })} {...dropTarget(row.key, onDrop)}>
-          <span className="menu-row-grip" aria-hidden="true">
-            <Icon name="grip" />
-          </span>
+        <li
+          className="menu-row"
+          data-key={row.key}
+          data-top-index={item.index}
+          data-folder={folder ? "" : undefined}
+          data-drop-into={intoMore ? "" : undefined}
+          {...lifted(source)}
+        >
+          {gripHandle(source)}
           <RowIcon symbol={row.symbol} />
           {folder ? (
             <button type="button" className="menu-row-title menu-disclosure" aria-expanded={expanded} onClick={() => toggleOpen(row.key)}>
@@ -218,9 +243,9 @@ export function ContextMenusCard({ focus }: { focus: string | null }) {
             {up}
             {down}
             {isMore || !hasMore ? null : (
-              <ActionButton icon="arrow.down.to.more" label={`${t("settingsWindow.menus.moveToMore")} ${row.title}`} onClick={() => save(demote(layout, row.key))} />
+              <ActionButton icon="arrow.down.to.more" action={t("settingsWindow.menus.moveToMore")} row={row.title} onClick={() => save(demote(layout, row.key))} />
             )}
-            <ActionButton icon="eye.slash" label={`${t("settingsWindow.menus.hide")} ${row.title}`} onClick={() => save(hide(layout, row.key))} />
+            <ActionButton icon="eye.slash" action={t("settingsWindow.menus.hide")} row={row.title} onClick={() => save(hide(layout, row.key))} />
           </span>
         </li>
         {expanded ? <li className="menu-nested">{children(row.key)}</li> : null}
@@ -300,9 +325,11 @@ export function ContextMenusCard({ focus }: { focus: string | null }) {
               {failure}
             </p>
           ) : null}
-          <ol className="menu-preview" data-menu-preview="">
+          <ol className="menu-preview" data-menu-preview="" data-reordering={dragging?.active ? "" : undefined} ref={list}>
             {shown.top.map((item, position) => topRow(item, position, shown.top.length))}
-            <li className="menu-drop-end" {...dropTarget("end", (dragged) => insertAt(dragged, layout.top.length))} aria-hidden="true" />
+            {dragging?.active && dragging.line !== null ? (
+              <li className="menu-drop-line" aria-hidden="true" data-drop-line="" style={{ transform: `translateY(${dragging.line}px)` }} />
+            ) : null}
           </ol>
           {shown.hidden.length > 0 ? (
             <div className="menus-hidden" data-hidden="">
@@ -313,7 +340,7 @@ export function ContextMenusCard({ focus }: { focus: string | null }) {
                     <RowIcon symbol={row.symbol} />
                     <span className="menu-row-title">{row.title}</span>
                     <span className="menu-row-actions">
-                      <ActionButton icon="eye" label={`${t("settingsWindow.menus.show")} ${row.title}`} onClick={() => save(show(menu, layout, row.key))} />
+                      <ActionButton icon="eye" action={t("settingsWindow.menus.show")} row={row.title} onClick={() => save(show(menu, layout, row.key))} />
                     </span>
                   </li>
                 ))}
