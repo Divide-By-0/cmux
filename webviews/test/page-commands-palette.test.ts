@@ -226,9 +226,9 @@ await requireBrowserLane("page-commands-palette.test.ts", async () => {
       );
       const shown = page.locator('aside.acpmux-chat-inspector[data-presence="shown"]');
       await page.evaluate(() => window.cmuxAcpmuxBridge!.command!("showBackgroundTasks"));
-      await shown.locator('[data-section="tasks"]').waitFor({ timeout: 10_000 });
+      await shown.locator('[data-section="tasks"]').first().waitFor({ timeout: 10_000 });
       await page.evaluate(() => window.cmuxAcpmuxBridge!.command!("showSubagents"));
-      await shown.locator('[data-section="subagents"]').waitFor({ timeout: 10_000 });
+      await shown.locator('[data-section="subagents"]').first().waitFor({ timeout: 10_000 });
     } finally {
       await page.close();
     }
