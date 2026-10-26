@@ -68,11 +68,16 @@ final class CEFLinkClickTracker {
             : window.convertPoint(toScreen: event.locationInWindow)
         guard let browser = CEFLinkClicks.browser(clickedIn: ObjectIdentifier(window), parent: window.parent.map(ObjectIdentifier.init),
                                                   at: point, targets: targets()) else { return }
-        onGesture(browser)
-        guard event.type == .leftMouseUp || event.type == .otherMouseUp else { return }
-        let button = event.type == .otherMouseUp ? event.buttonNumber : 0
-        clicks[browser] = CEFLinkClickRecord(gesture: BrowserLinkGesture(flags: event.modifierFlags, button: button),
-                                             timestamp: event.timestamp)
+        record(event.type, on: browser, button: event.buttonNumber, flags: event.modifierFlags, timestamp: event.timestamp)
+    }
+
+    /// An input event of `type` on page `browser`: every press, release and key is the person's
+    /// gesture (the release too: a page that saves on a drag's release acts on it); a left or
+    /// middle release is also the page's last click.
+    func record(_ type: NSEvent.EventType, on browser: Int32, button: Int, flags: NSEvent.ModifierFlags, timestamp: TimeInterval) {
+        guard type == .leftMouseUp || type == .otherMouseUp else { return onGesture(browser) }
+        clicks[browser] = CEFLinkClickRecord(gesture: BrowserLinkGesture(flags: flags, button: type == .otherMouseUp ? button : 0),
+                                             timestamp: timestamp)
     }
 
     func forget(opener: Int32) {
