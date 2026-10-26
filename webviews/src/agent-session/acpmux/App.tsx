@@ -5122,6 +5122,7 @@ function AcpmuxPane() {
   const [displayAnchor, setDisplayAnchor] = useState<HTMLElement | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deleteConfirmSession, setDeleteConfirmSession] = useState<string>();
+  const deleteInFlight = useRef<{ target: string; client: AcpmuxDirectClient }>();
   const inspectorOpener = useRef<HTMLElement | undefined>(undefined);
   const inspectorOpenRef = useRef(false);
   const inspectorHiddenSurfaceRef = useRef(false);
@@ -7796,13 +7797,21 @@ function AcpmuxPane() {
     const target = deleteConfirmSession;
     const client = directClient.current;
     if (!target || target !== snapshot.sessionId || !client) return;
+    deleteInFlight.current = { target, client };
     await client.purge();
     // The purge can resolve after the dialog was dismissed or the pane selected another chat.
     // Never close the newly selected tab for the old chat's completion.
     // A purge clears the client's selected session as part of its own notification; that is the
     // completion we want to close. A navigation, however, selects another session on the same
     // client and must win over this old deletion.
-    if (directClient.current !== client || (client.selectedSession !== undefined && client.selectedSession !== target)) return;
+    if (
+      deleteInFlight.current?.target !== target ||
+      deleteInFlight.current.client !== client ||
+      directClient.current !== client ||
+      (client.selectedSession !== undefined && client.selectedSession !== target)
+    )
+      return;
+    deleteInFlight.current = undefined;
     setDeleteConfirmOpen(false);
     setDeleteConfirmSession(undefined);
     if (!quick) await callNative("pane.action", { id: "closeTab" });
@@ -7813,9 +7822,10 @@ function AcpmuxPane() {
     setDeleteConfirmOpen(true);
   };
   useEffect(() => {
-    if (deleteConfirmSession && deleteConfirmSession !== snapshot.sessionId) {
+    if (deleteConfirmSession && snapshot.sessionId && deleteConfirmSession !== snapshot.sessionId) {
       setDeleteConfirmSession(undefined);
       setDeleteConfirmOpen(false);
+      deleteInFlight.current = undefined;
     }
   }, [deleteConfirmSession, snapshot.sessionId]);
   const archive = archiveRow(
@@ -8180,20 +8190,12 @@ function AcpmuxPane() {
           shortcutLabel: "A",
         };
     const moveChildren = [
-      ...(moves.includes(CONNECT_ACTIONS.move)
-        ? moveTargets.length > 0
-          ? moveTargets.map((target) => ({
-              key: `machine:${target.id}`,
-              label: target.label,
-              onSelect: () => moveChatToMachine(target.id),
-            }))
-          : [
-              {
-                key: "move",
-                label: t("composer.moveToCloud"),
-                onSelect: () => offloadChat("move"),
-              },
-            ]
+      ...(moves.includes(CONNECT_ACTIONS.move) && moveTargets.length > 0
+        ? moveTargets.map((target) => ({
+            key: `machine:${target.id}`,
+            label: target.label,
+            onSelect: () => moveChatToMachine(target.id),
+          }))
         : []),
       ...(moves.includes(CONNECT_ACTIONS.bringBack)
         ? [
@@ -9939,7 +9941,10 @@ function AcpmuxPane() {
           open={deleteConfirmOpen}
           onOpenChange={(next) => {
             setDeleteConfirmOpen(next);
-            if (!next) setDeleteConfirmSession(undefined);
+            if (!next) {
+              setDeleteConfirmSession(undefined);
+              deleteInFlight.current = undefined;
+            }
           }}
           label={t("permission.verb.delete")}
           className="acpmux-delete-dialog"
