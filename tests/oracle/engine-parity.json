@@ -1,0 +1,34 @@
+{
+  "schema": "cmux-oracle-engine-parity-v1",
+  "description": "Engine parity (plans/cmux-next/chrome-parity/p15-oracle.md 3F.4, task p15-oracle-113): `oracle.py diff --engine webkit,chromium` compares the two browser.defaultEngine arms of one build. `projected` values name the engine, not a behavior, and are rewritten on both arms before diff.py. `expected_differences` are the values where the arms differ by design, each with its reason (diff.py --expected); every other divergence is a parity bug.",
+  "projected": [
+    {
+      "pointer": "/facets/tabs/panes/*/tabs/*/engine",
+      "drop": true,
+      "reason": "each arm's own engine name (webkit, or chromium/cef): parity asks whether the tabs behave the same without it"
+    },
+    {
+      "pointer": "/facets/tabs/panes/*/tabs/*/url",
+      "same": ["chrome://newtab/", "about:blank"],
+      "as": "$NEWTAB",
+      "reason": "a tab opened without a URL loads its engine's New Tab page, chrome://newtab/ in Chromium and about:blank in WebKit (BrowserNewTabPage.initialURL); both are the New Tab page (BrowserNewTabPage.isNewTabPage)"
+    }
+  ],
+  "expected_differences": [
+    {
+      "pointer": "/facets/settings/effectiveSha256",
+      "reason": "the effective config holds browser.defaultEngine, the one setting the arms differ in",
+      "task": "p15-oracle-113"
+    },
+    {
+      "pointer": "/facets/settings/nonDefaultKeys",
+      "reason": "browser.defaultEngine is a non-default key on the webkit arm only: chromium is the default (BrowserDefaultEngine.fallback)",
+      "task": "p15-oracle-113"
+    },
+    {
+      "pointer": "/facets/liveObjects/cefBrowsers",
+      "reason": "browser tabs and cmux pages follow browser.defaultEngine, so the webkit arm hosts them in WebKit views instead of CEF browsers",
+      "task": "p15-oracle-113"
+    }
+  ]
+}

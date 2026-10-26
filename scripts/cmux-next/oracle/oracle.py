@@ -32,7 +32,10 @@ A result is {"status": "Pass"|"Failure"|"Crash"|"Timeout", "checkpoints": [{"ste
 optional "uncertain": true, optional "notComparable": [facet, ...]}], "message": str,
 optional "step" (where a Crash or Timeout happened), optional "session_dirty": true (LeakedState
 or a lost process: the next case gets a fresh session), optional "switch_hits": {name: {arm:
-count}}}. This file hashes each snapshot (sha256 of its sorted-key compact JSON) and decides
+count}}}. session_ctx carries the run's "engine" (null, or the `--engine` arm) and
+"settings" ({dotted cmux-next.json path: value}), which the driver writes into the session's
+private scratch config before launch; an engine arm sets {"browser.defaultEngine": ENGINE}.
+This file hashes each snapshot (sha256 of its sorted-key compact JSON) and decides
 flakiness by hashes; diff.py compares the snapshot values.
 
 Run directory (`run --out DIR`; the format diff.py (014) reads, with the extra fields below):
@@ -45,6 +48,17 @@ Run directory (`run --out DIR`; the format diff.py (014) reads, with the extra f
                         that is not flaky has the same hashes): {"case", "suite", "step", "index",
                         "checkpoint", "snapshot", "sha256", "attempt", "result"}
     events.jsonl       one line per attempt: phase, status, ms, message, checkpoint hashes
+Engine parity (spec 3F.4, task p15-oracle-113): `run --engine webkit|chromium` sets
+browser.defaultEngine for every session and leaves out the cases that pin
+environment.engine or require the chromium capability, so both arms run one selection.
+`diff --engine A,B --base-run ... --head-run ...` compares the A arm with the B arm after the
+projection of tests/oracle/engine-parity.json (the tabs facet without engine: each tab's
+`engine` dropped and the engine's own New Tab address made one value); the file's
+expected_differences go to diff.py, each with its reason. An arm whose tabs never show its
+engine is refused (engine-not-exercised). Without run directories, `diff --engine` on the app
+goes to fleet.py like every app diff. This is WPT's one suite on several products
+(third_party/wpt_tools/wpt/tools/wptrunner/wptrunner/browsers/) with the per-configuration
+expected differences of Blink's FlagExpectations (third_party/blink/web_tests/FlagExpectations/).
 `oracle.py rebaseline --run DIR [baselines.py options]` writes the golden cases of DIR in the
 run format baselines.py (016) reads (a `cases` list, the case name without its suite) and runs
 `baselines.py rebaseline` on it.
@@ -58,7 +72,8 @@ Sibling interfaces this file calls:
         suite_class(suite), BaselineError; baselines.py rebaseline --run DIR         (016)
     expectations.Expectations.load_root(root), RunConfig, resolve, should_run, lint  (015)
     linux_run.sh build REF -> last stdout line is the cmux-tui binary path          (024)
-    fleet.py diff ARGS: the app product's base/head and switch diffs                (050)
+    fleet.py diff ARGS: the app product's base/head, switch and engine diffs; an engine
+        arm is `oracle.py run --engine ENGINE` per shard                            (050)
 """
 
 from __future__ import annotations
@@ -73,6 +88,7 @@ import itertools
 import json
 import platform as platform_mod
 import random
+import shutil
 import socket
 import subprocess
 import sys
@@ -89,6 +105,7 @@ DEFAULT_CORPUS = REPO / "tests" / "oracle" / "corpus"
 DEFAULT_EXPECTATIONS_ROOT = REPO / "tests" / "oracle"
 DEFAULT_BASELINES_ROOT = REPO / "tests" / "oracle" / "baselines"
 SWITCH_REGISTRY = REPO / "plans" / "cmux-next" / "refactor-switches"
+ENGINE_PARITY = REPO / "tests" / "oracle" / "engine-parity.json"
 CASE_SCHEMA = REPO / "schemas" / "oracle" / "case-v1.schema.json"
 RESOURCE_OPERATIONS = REPO / "cmux-tui" / "spec" / "resource-operations-v2.json"
 DEFAULT_OUT_BASE = Path("/tmp/oracle/runs")
@@ -127,6 +144,12 @@ CRASH_KINDS = frozenset({"renderer", "gpu", "browser", "utility", "daemon", "hol
 PLATFORMS = ("linux", "mac", "windows")
 BUILDS = ("debug", "bench", "asan", "tsan")
 ARMS = ("old", "new")
+# Engine parity: the browser.defaultEngine values (BrowserDefaultEngine.swift) and the tab
+# engine names the tabs facet may read back for each (the daemon's BrowserEngine says cef).
+ENGINES = ("webkit", "chromium")
+ENGINE_SETTING = "browser.defaultEngine"
+ENGINE_READBACK = {"webkit": frozenset({"webkit"}), "chromium": frozenset({"chromium", "cef"})}
+ENGINE_PRODUCTS = frozenset({"app"})
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 DEFAULT_RETRY_LIMIT = 3
 # The VM default is 200 jobs (spec 3G); a fleet mini runs one GUI app at a time.
@@ -291,10 +314,20 @@ def parse_list(values: Optional[Sequence[str]]) -> List[str]:
     return out
 
 
+def engine_neutral(case: Case) -> bool:
+    """A case an engine arm can run: it pins no browser engine and needs no Chromium-only step."""
+    environment = case.data.get("environment") or {}
+    return environment.get("engine") not in ENGINES and "chromium" not in case.requires
+
+
 def select_cases(
-    cases: Sequence[Case], *, suites: Sequence[str], filters: Sequence[str], product: str, platform: str
+    cases: Sequence[Case], *, suites: Sequence[str], filters: Sequence[str], product: str, platform: str,
+    engine: Optional[str] = None,
 ) -> Tuple[List[Case], List[Case]]:
-    """Returns (selected, not_applicable). `suites` empty or ["all"] means every suite."""
+    """Returns (selected, not_applicable). `suites` empty or ["all"] means every suite.
+
+    An engine run leaves out the cases that are not engine neutral, on both arms alike.
+    """
     wanted = None if not suites or "all" in suites else set(suites)
     caps = PRODUCTS[product]
     selected: List[Case] = []
@@ -304,7 +337,7 @@ def select_cases(
             continue
         if filters and not any(fnmatch.fnmatchcase(case.id, f) for f in filters):
             continue
-        if case.requires <= caps and platform in case.platforms:
+        if case.requires <= caps and platform in case.platforms and (engine is None or engine_neutral(case)):
             selected.append(case)
         else:
             not_applicable.append(case)
@@ -576,6 +609,7 @@ class RunOptions:
     dry_run: bool = False
     flaky_out: Optional[Path] = None
     expectations_root: Path = DEFAULT_EXPECTATIONS_ROOT
+    engine: Optional[str] = None
 
     @property
     def filtered(self) -> bool:
@@ -611,6 +645,7 @@ class RunOptions:
             "switches": dict(sorted(self.switches.items())),
             "ref": self.ref,
             "tag": self.tag,
+            "engine": self.engine,
         }
 
 
@@ -640,6 +675,8 @@ def execute(plan: Plan, options: RunOptions, open_session: SessionOpener, expect
         "tag": options.tag,
         "binary": options.binary,
         "out_dir": str(options.out),
+        "engine": options.engine,
+        "settings": {ENGINE_SETTING: options.engine} if options.engine else {},
     }
     runnable = [tuple(c for c in batch if not expected[c.id].skip) for batch in plan.batches]
     runnable = [batch for batch in runnable if batch]
@@ -831,7 +868,8 @@ def perform_run(
     started = time.time()
     check_out_dir(options.out)
     selected, not_applicable = select_cases(
-        cases, suites=options.suites, filters=options.filters, product=options.product, platform=options.platform
+        cases, suites=options.suites, filters=options.filters, product=options.product, platform=options.platform,
+        engine=options.engine,
     )
     plan = make_plan(selected, shard=options.shard, seed=options.seed, batch_limit=options.batch_limit)
     expected = {c.id: expectation(c) if expectation else PASS_ONLY for c in plan.order}
@@ -914,7 +952,8 @@ def write_index(options: RunOptions, receipt: Dict[str, Any]) -> None:
     lines = [
         f"# oracle run {receipt['runId']}",
         "",
-        f"- product {options.product}, platform {options.platform}, build {options.build}",
+        f"- product {options.product}, platform {options.platform}, build {options.build}"
+        + (f", engine {options.engine}" if options.engine else ""),
         f"- shard {options.shard[0]}/{options.shard[1]}: {len(receipt['order'])} of {receipt['selection']['count']} selected cases",
         f"- seed {options.seed}, batch limit {options.batch_limit}, jobs {options.jobs}, repeat {options.repeat}, "
         f"retry limit {options.retry_limit}",
@@ -1081,7 +1120,7 @@ def run_diff_py(a_dir: Path, b_dir: Path, out: Path, expected: Sequence[Path]) -
 def compare_views(a: RunView, b: RunView, *, a_dir: Path, b_dir: Path, out: Path, labels: Tuple[str, str],
                   partial: bool, expected: Sequence[Path], rules: Sequence[Dict[str, str]],
                   not_comparable: Optional[Dict[str, str]] = None, refused: Optional[str] = None,
-                  as_json: bool = False) -> int:
+                  as_json: bool = False, extra: Optional[Dict[str, Any]] = None) -> int:
     """Checks that the sides are comparable, then hands every comparison to diff.py.
 
     diff.py owns the host check, the first divergence per case and expected differences, so an
@@ -1126,6 +1165,7 @@ def compare_views(a: RunView, b: RunView, *, a_dir: Path, b_dir: Path, out: Path
         "not_comparable": dict(sorted((not_comparable or {}).items())),
         "divergence": str(target) if target.is_file() else None,
         "ok": refused is None and code == DIFF_OK,
+        **(extra or {}),
     }
     write_json(out / "comparison.json", comparison)
     if as_json:
@@ -1333,7 +1373,7 @@ def new_seed() -> int:
 
 def options_from_args(args: argparse.Namespace, *, retry_default: Optional[int], out: Path, run_id: str,
                       switch: Optional[str], arm: Optional[str], switches: Dict[str, str],
-                      ref: Optional[str], binary: Optional[str]) -> RunOptions:
+                      ref: Optional[str], binary: Optional[str], engine: Optional[str] = None) -> RunOptions:
     suites = tuple(parse_list(args.suite)) or ("all",)
     filters = tuple(parse_list(args.filter))
     seed = args.seed
@@ -1371,6 +1411,7 @@ def options_from_args(args: argparse.Namespace, *, retry_default: Optional[int],
         dry_run=args.dry_run,
         flaky_out=args.flaky_out,
         expectations_root=args.expectations_root,
+        engine=engine,
     )
     if args.retry_limit is not None:
         retry = args.retry_limit
@@ -1426,8 +1467,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     run_id = args.run_id or new_run_id()
     out = args.out or DEFAULT_OUT_BASE / run_id
     switches = resolve_switches(load_switch_registry(), args.switch, args.arm)
+    if args.engine and args.product not in ENGINE_PRODUCTS:
+        raise UsageError(f"--engine needs a product with a browser: {sorted(ENGINE_PRODUCTS)}")
     options = options_from_args(args, retry_default=None, out=out, run_id=run_id, switch=args.switch, arm=args.arm,
-                                switches=switches, ref=args.ref, binary=args.binary)
+                                switches=switches, ref=args.ref, binary=args.binary, engine=args.engine)
     receipt, code = run_one(options)
     print_run(receipt, options, args.json)
     return code
@@ -1485,10 +1528,190 @@ def comparison_rules(view: RunView, root: Path) -> List[Dict[str, str]]:
     return store.pointer_rules() if store else []
 
 
+def fleet_diff(args: argparse.Namespace) -> int:
+    fleet = HERE / "fleet.py"
+    if not fleet.is_file():
+        raise UsageError("app diffs run on the fleet through fleet.py, not on this branch yet (p15-oracle-050)")
+    return subprocess.run([sys.executable, "-I", str(fleet), "diff", *args.raw_argv], check=False).returncode
+
+
+# ---------------------------------------------------------------------------------------
+# Engine parity (spec 3F.4)
+
+
+PROJECTION_KEYS = frozenset({"pointer", "reason", "drop", "same", "as"})
+
+
+@dataclass(frozen=True)
+class Projection:
+    """One `projected` entry of engine-parity.json: a value that names the engine, not a behavior.
+
+    `tokens` is the pointer split into members, `*` matching every member or element. A drop
+    removes the member; otherwise a value in `same` becomes `as_value`, on both arms alike.
+    """
+
+    pointer: str
+    reason: str
+    tokens: Tuple[str, ...]
+    same: frozenset
+    as_value: Optional[str]
+
+    def apply(self, value: Any, depth: int = 0) -> None:
+        head, last = self.tokens[depth], depth == len(self.tokens) - 1
+        if isinstance(value, dict):
+            keys: List[Any] = list(value) if head == "*" else [head] if head in value else []
+        elif isinstance(value, list):
+            keys = list(range(len(value))) if head == "*" else [int(head)] if head.isdigit() and int(head) < len(value) else []
+        else:
+            return
+        for key in keys:
+            if not last:
+                self.apply(value[key], depth + 1)
+            elif self.as_value is None:
+                if isinstance(value, dict):
+                    del value[key]
+            elif isinstance(value[key], str) and value[key] in self.same:
+                value[key] = self.as_value
+
+
+def load_engine_parity(path: Path) -> List[Projection]:
+    """The projection of engine-parity.json; diff.py loads and checks its expected_differences."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise UsageError(f"{path}: no readable engine parity file ({error})") from None
+    if not isinstance(data, dict) or not isinstance(data.get("projected"), list) \
+            or not isinstance(data.get("expected_differences"), list):
+        raise UsageError(f"{path}: needs a `projected` list and an `expected_differences` list")
+    projections = []
+    for position, entry in enumerate(data["projected"]):
+        where = f"{path}: projected[{position}]"
+        if not isinstance(entry, dict) or set(entry) - PROJECTION_KEYS:
+            raise UsageError(f"{where}: must be an object with only {sorted(PROJECTION_KEYS)}")
+        pointer, reason = entry.get("pointer"), entry.get("reason")
+        if not isinstance(pointer, str) or not pointer.startswith("/"):
+            raise UsageError(f"{where}: pointer must be a JSON pointer starting with '/'")
+        if not isinstance(reason, str) or not reason.strip():
+            raise UsageError(f"{where}: reason must say why the value names the engine")
+        same, as_value = entry.get("same"), entry.get("as")
+        drop = entry.get("drop") is True and same is None and as_value is None
+        mapped = "drop" not in entry and isinstance(as_value, str) and isinstance(same, list) and bool(same) \
+            and all(isinstance(v, str) for v in same)
+        if not (drop or mapped):
+            raise UsageError(f'{where}: either "drop": true, or "same" (a list of strings) with "as" (a string)')
+        tokens = tuple(t.replace("~1", "/").replace("~0", "~") for t in pointer[1:].split("/"))
+        projections.append(Projection(pointer, reason, tokens, frozenset(same or ()), as_value))
+    return projections
+
+
+def parse_engines(text: str) -> Tuple[str, str]:
+    engines = parse_list([text])
+    if len(engines) != 2 or engines[0] == engines[1] or not set(engines) <= set(ENGINES):
+        raise UsageError(f"--engine {text}: two different engines of {', '.join(ENGINES)} as A,B (A is --base-run)")
+    return engines[0], engines[1]
+
+
+def checkpoint_lines(run_dir: Path) -> List[Dict[str, Any]]:
+    path = run_dir / "checkpoints.jsonl"
+    if not path.is_file():
+        return []
+    try:
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except ValueError as error:
+        raise UsageError(f"{path}: not JSON lines ({error})") from None
+
+
+def engine_readback(rows: Iterable[Mapping[str, Any]]) -> Dict[str, int]:
+    """Tab readings per engine name over the tabs facet of every checkpoint; `none` names no engine."""
+    counts: Dict[str, int] = {}
+    for row in rows:
+        snapshot = row.get("snapshot")
+        tabs = ((snapshot.get("facets") or {}).get("tabs") if isinstance(snapshot, dict) else None) or {}
+        panes = tabs.get("panes") if isinstance(tabs, dict) else None
+        for pane in panes if isinstance(panes, list) else ():
+            for tab in (pane.get("tabs") or ()) if isinstance(pane, dict) else ():
+                engine = tab.get("engine") if isinstance(tab, dict) else None
+                name = engine if isinstance(engine, str) else "none"
+                counts[name] = counts.get(name, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def engine_refusal(engines: Tuple[str, str], views: Tuple[RunView, RunView],
+                   readback: Mapping[str, Mapping[str, int]]) -> Optional[str]:
+    """Why the two runs are not the two engine arms: an arm not applied, or not exercised."""
+    for engine, flag, view in zip(engines, ("--base-run", "--head-run"), views):
+        ran = view.receipt["config"].get("engine")
+        if ran != engine:
+            return f"engine-not-applied: {flag} ran engine {ran}, not {engine} (oracle.py run --engine {engine})"
+    for engine in engines:
+        counts = readback[engine]
+        if not any(counts.get(name) for name in ENGINE_READBACK[engine]):
+            return (f"engine-not-exercised: no tab of the {engine} arm reads back engine {engine} "
+                    f"(tabs facet readings {dict(counts)})")
+    return None
+
+
+def engines_differ(a: RunView, b: RunView) -> Optional[str]:
+    """Two runs of different engines compare only through diff --engine, which drops the engine."""
+    ea, eb = a.receipt["config"].get("engine"), b.receipt["config"].get("engine")
+    if ea is None or eb is None or ea == eb:
+        return None
+    return f"the sides ran different browser engines ({ea} vs {eb}): compare them with diff --engine {ea},{eb}"
+
+
+def write_projected(source: Path, target: Path, rows: Sequence[Dict[str, Any]], projections: Sequence[Projection]) -> Path:
+    """A copy of a run directory whose snapshots no longer name their engine, hashes recomputed."""
+    target.mkdir(parents=True, exist_ok=True)
+    for name in ("receipt.json", "events.jsonl"):
+        if (source / name).is_file():
+            shutil.copyfile(source / name, target / name)
+    projected = []
+    for row in rows:
+        snapshot = json.loads(json.dumps(row.get("snapshot")))
+        for projection in projections:
+            projection.apply(snapshot)
+        projected.append({**row, "snapshot": snapshot, **({"sha256": snapshot_sha256(snapshot)} if "sha256" in row else {})})
+    write_jsonl(target / "checkpoints.jsonl", projected)
+    return target
+
+
+def engine_diff(args: argparse.Namespace, out: Path) -> int:
+    """`diff --engine A,B`: one build with browser.defaultEngine A against B, the engine left out."""
+    engines = parse_engines(args.engine)
+    others = [flag for flag, on in (("--switch", args.switch), ("--arm", args.arm), ("--base/--head", args.base or args.head),
+                                    ("--baselines", args.baselines)) if on]
+    if others:
+        raise UsageError(f"--engine compares the two engine arms of one build; it does not take {', '.join(others)}")
+    projections = load_engine_parity(args.engine_parity)
+    if not (args.base_run or args.head_run):
+        if args.product not in ENGINE_PRODUCTS:
+            raise UsageError(f"--engine needs a product with a browser: {sorted(ENGINE_PRODUCTS)}")
+        return fleet_diff(args)
+    if not (args.base_run and args.head_run):
+        raise UsageError(f"--engine {args.engine} needs --base-run ({engines[0]} arm) and --head-run ({engines[1]} arm)")
+    base, base_errors = merge_runs(args.base_run, require_complete=False)
+    head, head_errors = merge_runs(args.head_run, require_complete=False)
+    if base_errors or head_errors:
+        raise UsageError("; ".join(base_errors + head_errors))
+    a_dir, b_dir = write_merged(base, out / "a-merged"), write_merged(head, out / "b-merged")
+    a_rows, b_rows = checkpoint_lines(a_dir), checkpoint_lines(b_dir)
+    readback = {engines[0]: engine_readback(a_rows), engines[1]: engine_readback(b_rows)}
+    return compare_views(
+        base, head, a_dir=write_projected(a_dir, out / f"a-{engines[0]}", a_rows, projections),
+        b_dir=write_projected(b_dir, out / f"b-{engines[1]}", b_rows, projections), out=out, labels=engines,
+        partial=args.partial, expected=[args.engine_parity], rules=comparison_rules(head, args.expectations_root),
+        refused=engine_refusal(engines, (base, head), readback), as_json=args.json,
+        extra={"engines": list(engines), "engine_readback": readback, "engine_parity": str(args.engine_parity),
+               "projected": [p.pointer for p in projections]},
+    )
+
+
 def cmd_diff(args: argparse.Namespace) -> int:
     out = args.out or DEFAULT_OUT_BASE / ("diff-" + new_run_id())
     check_out_dir(out)
     out.mkdir(parents=True, exist_ok=True)
+    if args.engine:
+        return engine_diff(args, out)
     if args.head_run:
         head, head_errors = merge_runs(args.head_run, require_complete=False)
         if args.baselines:
@@ -1507,12 +1730,10 @@ def cmd_diff(args: argparse.Namespace) -> int:
             raise UsageError("; ".join(base_errors + head_errors))
         return compare_views(base, head, a_dir=write_merged(base, out / "a-merged"), b_dir=write_merged(head, out / "b-merged"),
                              out=out, labels=("base", "head"), partial=args.partial, expected=[],
-                             rules=comparison_rules(head, args.expectations_root), as_json=args.json)
+                             rules=comparison_rules(head, args.expectations_root), as_json=args.json,
+                             refused=engines_differ(base, head))
     if args.product == "app":
-        fleet = HERE / "fleet.py"
-        if not fleet.is_file():
-            raise UsageError("app diffs run on the fleet through fleet.py, not on this branch yet (p15-oracle-050)")
-        return subprocess.run([sys.executable, "-I", str(fleet), "diff", *args.raw_argv], check=False).returncode
+        return fleet_diff(args)
     registry = load_switch_registry()
     sides, expected = diff_sides(args, registry)
     if args.switch and not args.suite:
@@ -1758,6 +1979,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--switch", help="refactor switch name (plans/cmux-next/refactor-switches)")
     run.add_argument("--arm", help="old or new with --switch; launch-config or default without")
     run.add_argument("--ref", help="source ref recorded in the receipt")
+    run.add_argument("--engine", choices=ENGINES, help="browser.defaultEngine of every session (an engine parity arm)")
     run.add_argument("--out", type=Path, help=f"run directory (default {DEFAULT_OUT_BASE}/<run id>)")
     run.set_defaults(func=cmd_run)
 
@@ -1775,6 +1997,9 @@ def build_parser() -> argparse.ArgumentParser:
     diff.add_argument("--baselines", action="store_true", help="compare --head-run golden cases with reviewed baselines")
     diff.add_argument("--baselines-root", type=Path, default=DEFAULT_BASELINES_ROOT)
     diff.add_argument("--partial", action="store_true", help="compare a shard subset; the result says partial")
+    diff.add_argument("--engine", help="engine parity: A,B of webkit and chromium; --base-run is the A arm")
+    diff.add_argument("--engine-parity", type=Path, default=ENGINE_PARITY,
+                      help="projection and expected differences of engine parity (default tests/oracle/engine-parity.json)")
     diff.add_argument("--out", type=Path, help="comparison directory")
     diff.set_defaults(func=cmd_diff)
 

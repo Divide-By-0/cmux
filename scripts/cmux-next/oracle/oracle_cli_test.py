@@ -535,6 +535,153 @@ class CompareTests(unittest.TestCase):
             self.assertEqual(code, 2)
 
 
+class EngineDriver(FakeDriver):
+    """A browser product: its tabs facet reads back the session's browser.defaultEngine.
+
+    `differ` maps a case id to a tabs facet value that only the chromium arm shows (a parity bug).
+    """
+
+    def __init__(self, readback=None, differ=None):
+        super().__init__()
+        self.readback = readback
+        self.differ = differ or {}
+
+    def run(self, case, ctx, session):
+        cid = ctx["case_id"]
+        with self.mutex:
+            self.calls.append((cid, ctx["phase"], ctx["attempt"], session, ctx))
+        engine = self.session_ctx["settings"].get("browser.defaultEngine", "chromium")
+        tab = {"tab": "tab_1", "kind": "browser", "engine": self.readback or ("cef" if engine == "chromium" else engine),
+               "url": "chrome://newtab/" if engine == "chromium" else "about:blank", "loading": False,
+               "zoom": self.differ.get(cid, 1) if engine == "chromium" else 1}
+        facets = {"tabs": {"panes": [{"pane": "pane_1", "selected": "tab_1", "tabs": [tab]}]},
+                  "settings": {"effectiveSha256": "sha256:" + engine, "nonDefaultKeys": [] if engine == "chromium" else
+                               ["browser.defaultEngine"]},
+                  "liveObjects": {"cefBrowsers": 1 if engine == "chromium" else 0, "terminals": 1}}
+        snapshot = {"schema": "cmux.oracle.snapshot/v1", "facets": facets}
+        return {"status": "Pass", "checkpoints": [{"step": "s1", "checkpoint": "settled", "snapshot": snapshot}]}
+
+    def open_session(self, ctx):
+        self.session_ctx = ctx
+        return super().open_session(ctx)
+
+
+class EngineParityTests(unittest.TestCase):
+    """`run --engine` arms and `diff --engine webkit,chromium` through the real diff.py."""
+
+    def corpus(self, tmp):
+        write_corpus(tmp / "corpus", suites=("tabs",), per_suite=3, extra={
+            "tabs/pinned-webkit": {"id": "tabs/pinned-webkit", "environment": {"engine": "webkit"}, "steps": []},
+            "tabs/crash-renderer": {"id": "tabs/crash-renderer", "requires": ["chromium"], "steps": []},
+        })
+
+    def arms(self, tmp, webkit_driver, chromium_driver, **overrides):
+        cases, errors = oracle.load_corpus(tmp / "corpus")
+        self.assertEqual(errors, [])
+        for engine, driver in (("webkit", webkit_driver), ("chromium", chromium_driver)):
+            oracle.perform_run(options(tmp, product="app", out=tmp / engine, run_id=engine,
+                                       engine=overrides.get(engine, engine)), cases, driver.open_session, None, {})
+
+    def diff(self, tmp, *extra, engines="webkit,chromium"):
+        argv = ["diff", "--product", "app", "--engine", engines, "--base-run", str(tmp / "webkit"),
+                "--head-run", str(tmp / "chromium"), "--out", str(tmp / "cmp"),
+                "--expectations-root", str(tmp / "expectations"), *extra]
+        code = quiet(oracle.main, argv)
+        return code, json.loads((tmp / "cmp" / "comparison.json").read_text())
+
+    def test_engine_arm_sets_the_default_engine_and_leaves_out_engine_bound_cases(self):
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            self.corpus(tmp)
+            driver = EngineDriver()
+            self.arms(tmp, driver, EngineDriver())
+            self.assertEqual({c[4]["case_id"] for c in driver.calls}, {f"tabs/case-{i:03d}" for i in range(3)})
+            self.assertEqual(driver.session_ctx["engine"], "webkit")
+            self.assertEqual(driver.session_ctx["settings"], {"browser.defaultEngine": "webkit"})
+            receipt = json.loads((tmp / "webkit" / "receipt.json").read_text())
+            self.assertEqual(receipt["config"]["engine"], "webkit")
+            self.assertEqual(receipt["not_applicable"], 2)
+
+    def test_parity_drops_the_engine_and_explains_listed_differences(self):
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            self.corpus(tmp)
+            self.arms(tmp, EngineDriver(), EngineDriver())
+            code, cmp = self.diff(tmp)
+            self.assertEqual(code, 0, cmp)
+            self.assertTrue(cmp["ok"])
+            self.assertEqual(cmp["engines"], ["webkit", "chromium"])
+            self.assertEqual(cmp["engine_readback"], {"webkit": {"webkit": 3}, "chromium": {"cef": 3}})
+            self.assertEqual(cmp["summary"]["explained"], 3)
+            report = json.loads(Path(cmp["divergence"]).read_text())
+            reasons = {e["pointer"]: e["reason"] for case in report["cases"] for e in case["explained"]}
+            self.assertEqual(set(reasons), {"/facets/settings/effectiveSha256", "/facets/settings/nonDefaultKeys",
+                                            "/facets/liveObjects/cefBrowsers"})
+            self.assertTrue(all(reasons.values()))
+            projected = [json.loads(line) for line in (tmp / "cmp" / "a-webkit" / "checkpoints.jsonl").read_text().splitlines()]
+            tab = projected[0]["snapshot"]["facets"]["tabs"]["panes"][0]["tabs"][0]
+            self.assertNotIn("engine", tab)
+            self.assertEqual(tab["url"], "$NEWTAB")
+            self.assertEqual(projected[0]["sha256"], oracle.snapshot_sha256(projected[0]["snapshot"]))
+
+    def test_unlisted_engine_difference_is_a_divergence(self):
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            self.corpus(tmp)
+            self.arms(tmp, EngineDriver(), EngineDriver(differ={"tabs/case-001": 1.25}))
+            code, cmp = self.diff(tmp)
+            self.assertEqual(code, 1)
+            self.assertEqual(cmp["divergent"], ["tabs/case-001"])
+            report = json.loads(Path(cmp["divergence"]).read_text())
+            self.assertEqual(report["divergences"][0]["pointer"], "/facets/tabs/panes/0/tabs/0/zoom")
+
+    def test_arm_without_its_engine_is_refused(self):
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            self.corpus(tmp)
+            self.arms(tmp, EngineDriver(readback="cef"), EngineDriver())
+            code, cmp = self.diff(tmp)
+            self.assertEqual(code, oracle.EXIT_REFUSED)
+            self.assertTrue(cmp["refused"].startswith("engine-not-exercised: no tab of the webkit arm"), cmp["refused"])
+            self.arms(tmp, EngineDriver(), EngineDriver(), webkit="chromium")
+            code, cmp = self.diff(tmp)
+            self.assertEqual(code, oracle.EXIT_REFUSED)
+            self.assertTrue(cmp["refused"].startswith("engine-not-applied: --base-run ran engine chromium"), cmp["refused"])
+
+    def test_plain_diff_of_two_engines_is_refused(self):
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            self.corpus(tmp)
+            self.arms(tmp, EngineDriver(), EngineDriver())
+            argv = ["diff", "--base-run", str(tmp / "webkit"), "--head-run", str(tmp / "chromium"), "--out", str(tmp / "cmp")]
+            code = quiet(oracle.main, argv)
+            self.assertEqual(code, oracle.EXIT_REFUSED)
+            cmp = json.loads((tmp / "cmp" / "comparison.json").read_text())
+            self.assertIn("diff --engine webkit,chromium", cmp["refused"])
+
+    def test_bad_engine_arguments(self):
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            out = ["--out", str(tmp / "cmp")]
+            for engines in ("webkit", "webkit,webkit", "webkit,gecko"):
+                self.assertEqual(quiet(oracle.main, ["diff", "--product", "app", "--engine", engines, *out]), 2)
+            self.assertEqual(quiet(oracle.main, ["diff", "--product", "app", "--engine", "webkit,chromium", "--switch", "x", *out]), 2)
+            self.assertEqual(quiet(oracle.main, ["run", "--product", "daemon", "--engine", "webkit", "--dry-run",
+                                                 "--out", str(tmp / "run")]), 2)
+
+    def test_projection_file_is_checked(self):
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "parity.json"
+            for projected in ([{"pointer": "/a", "drop": True}], [{"pointer": "a", "drop": True, "reason": "r"}],
+                              [{"pointer": "/a", "drop": True, "same": ["x"], "as": "y", "reason": "r"}],
+                              [{"pointer": "/a", "same": [], "as": "y", "reason": "r"}]):
+                path.write_text(json.dumps({"projected": projected, "expected_differences": []}))
+                with self.assertRaises(oracle.UsageError):
+                    oracle.load_engine_parity(path)
+            self.assertEqual([p.pointer for p in oracle.load_engine_parity(oracle.ENGINE_PARITY)],
+                             ["/facets/tabs/panes/*/tabs/*/engine", "/facets/tabs/panes/*/tabs/*/url"])
+
+
 class BaselineTests(unittest.TestCase):
     """End to end: oracle.py run -> oracle.py rebaseline (baselines.py) -> oracle.py diff --baselines."""
 
