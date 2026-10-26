@@ -1,4 +1,5 @@
 public import AppKit
+public import CmuxNextDesignTokens
 
 /// Where a card sits relative to its target.
 public enum HoverCardPlacement: Sendable {
@@ -118,6 +119,14 @@ final class HoverCardPanel: NSPanel {
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+
+    /// The window stays where `place()` puts it: `rest(for:)` already keeps the card on screen.
+    /// The window is the card plus its clear band (`windowMargin`), so a tab just under the menu
+    /// bar puts the band's top in the menu bar, and AppKit's default constraint moved the whole
+    /// window, card and all, down below it: the card hung a toolbar's height under its tab
+    /// (Austin 2026-10-20: "The cards, when I hover on the tabs, are not connected to the tabs
+    /// themselves"). The band is clear and click-through, so it may sit under the menu bar.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 
     /// The card's frame on screen at rest: the window less its clear band.
     var cardFrame: CGRect { activeMorph == nil ? frame.insetBy(dx: Self.windowMargin, dy: Self.windowMargin) : restCardFrame }
@@ -397,7 +406,7 @@ extension HoverCardPanel {
             // mostly below the screen), it sits on the screen's bottom and its top rises past the
             // window's only as far as it must; a card taller than the screen sits on its bottom too.
             if origin.x + size.width > room.maxX {
-                origin.x = ((anchor.minX - HoverCardEscapeGeometry.rowGap) * scale).rounded(.up) / scale - size.width
+                origin.x = ((anchor.minX - HoverCardEscapeGeometry.edgeGap(scale: scale)) * scale).rounded(.up) / scale - size.width
                 isLeading = true
             }
             origin.x = clampX(origin.x)
@@ -437,8 +446,10 @@ extension HoverCardPanel {
         case .below: CGPoint(x: anchor.minX, y: up(anchor.minY - targetGap) - size.height)
         // The card's bottom edge on the tab's top edge (rounded down: into the tab).
         case .above: CGPoint(x: anchor.minX, y: down(anchor.maxY + targetGap))
-        // The card's leading edge `rowGap` past the row's trailing edge, top-aligned.
-        case .beside: CGPoint(x: down(anchor.maxX + HoverCardEscapeGeometry.rowGap), y: anchor.maxY - size.height)
+        // The card's leading edge one device pixel past the target's trailing edge, top-aligned: the
+        // sidebar row cards' gap (`HoverCardEscapeGeometry.edgeGap(scale:)`, Lawrence 2026-10-21 "horizontally
+        // only 1 pixel gap"), so the update card sits at the hover cards' gap (Lawrence 2026-10-19).
+        case .beside: CGPoint(x: down(anchor.maxX + HoverCardEscapeGeometry.edgeGap(scale: scale)), y: anchor.maxY - size.height)
         // Right of the row, its top on the row's top (before any clamp or flip the screen needs).
         case .besideRow: HoverCardEscapeGeometry(anchor: anchor, cardSize: size, scale: scale, alignment: rowAlignment).card.origin
         }
