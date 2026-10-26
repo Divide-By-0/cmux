@@ -75,7 +75,8 @@ final class CEFLinkClickTracker {
     /// gesture (the release too: a page that saves on a drag's release acts on it); a left or
     /// middle release is also the page's last click.
     func record(_ type: NSEvent.EventType, on browser: Int32, button: Int, flags: NSEvent.ModifierFlags, timestamp: TimeInterval) {
-        guard type == .leftMouseUp || type == .otherMouseUp else { return onGesture(browser) }
+        onGesture(browser)
+        guard type == .leftMouseUp || type == .otherMouseUp else { return }
         clicks[browser] = CEFLinkClickRecord(gesture: BrowserLinkGesture(flags: flags, button: type == .otherMouseUp ? button : 0),
                                              timestamp: timestamp)
     }
