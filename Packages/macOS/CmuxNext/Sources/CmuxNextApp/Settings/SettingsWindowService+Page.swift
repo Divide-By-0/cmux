@@ -67,8 +67,11 @@ extension SettingsWindowService {
     }
 
     /// Settings > Menus' reads and writes (ContextMenusSettingsPage).
-    var contextMenusRoute: ContextMenusPageRoute {
-        ContextMenusPageRoute(registry: services.registry, settings: { [weak services] in services?.settings })
+    var contextMenusRoute: ContextMenusPageProvider {
+        ContextMenusPageProvider { [weak services] in
+            guard let services, let settings = services.settings else { return nil }
+            return ContextMenusSettingsPage(registry: services.registry, settings: settings)
+        }
     }
 
     /// Where unset number rows' sliders sit, by schema key: the window opacity the theme resolved.
@@ -138,38 +141,5 @@ extension SettingsWindowService {
         guard let rgb = color.usingColorSpace(.sRGB) else { return "#808080" }
         let parts = [rgb.redComponent, rgb.greenComponent, rgb.blueComponent].map { Int(($0 * 255).rounded()) }
         return "#" + parts.map { String(format: "%02X", min(max($0, 0), 255)) }.joined()
-    }
-}
-
-/// Settings > Menus' page route: ``ContextMenusSettingsPage``, written only by the person's click on Settings.
-@MainActor
-final class ContextMenusPageRoute: PageProvider {
-    nonisolated static let prefix = ContextMenusSettingsPage.prefix
-    private let registry: ActionRegistry
-    private let settings: () -> SettingsController?
-
-    init(registry: ActionRegistry, settings: @escaping () -> SettingsController?) {
-        self.registry = registry
-        self.settings = settings
-    }
-
-    /// The host lists' `context_menus`; null before settings load.
-    var hostJSON: JSONValue {
-        settings().map { ContextMenusSettingsPage(registry: registry, settings: $0).hostJSON } ?? .null
-    }
-
-    func call(_ op: String, params: JSONValue, context: PageCallContext) async throws -> JSONValue {
-        guard context.page == PageDescriptor.settings.id, context.userGesture else {
-            throw PageError(code: "cmux.settings.user_only", message: "only you can change your menus")
-        }
-        guard let settings = settings() else { throw PageError.unavailable("settings are not loaded yet") }
-        let page = ContextMenusSettingsPage(registry: registry, settings: settings)
-        guard page.handles(op) else { throw PageError.unknownOp(op) }
-        do {
-            try await page.run(op, params: params)
-        } catch let invalid as ContextMenusSettingsPage.InvalidRequest {
-            throw PageError.invalidParams(invalid.message)
-        }
-        return .object([:])
     }
 }
