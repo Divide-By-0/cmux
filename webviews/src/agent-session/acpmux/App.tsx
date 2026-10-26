@@ -7797,6 +7797,9 @@ function AcpmuxPane() {
     const client = directClient.current;
     if (!target || target !== snapshot.sessionId || !client) return;
     await client.purge();
+    // The purge can resolve after the dialog was dismissed or the pane selected another chat.
+    // Never close the newly selected tab for the old chat's completion.
+    if (directClient.current !== client || snapshotRef.current?.sessionId !== target) return;
     setDeleteConfirmOpen(false);
     setDeleteConfirmSession(undefined);
     if (!quick) await callNative("pane.action", { id: "closeTab" });
