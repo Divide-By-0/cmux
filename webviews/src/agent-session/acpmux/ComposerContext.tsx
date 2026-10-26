@@ -112,19 +112,20 @@ export function ComposerContext({
   /// The environment picker opened: read the machines and their status again.
   onRefreshMachines?(): void;
 }) {
+  const pickerEnabled = environments || started;
   const computers = useMemo(
-    // The peers' transports and status draw only in the environment picker: the plain menu stays
-    // as it was.
+    // A started chat's chip is the same actionable environment picker as New Tab; preview controls
+    // whether the extra peer rows and status are shown before the chat starts.
     () =>
       availableComputers(
         summary,
         sessions,
         peers,
-        environments ? peerKinds : NO_PEER_KINDS,
+        pickerEnabled ? peerKinds : NO_PEER_KINDS,
         localName,
-        environments ? peerConnected : NO_PEER_CONNECTED,
+        pickerEnabled ? peerConnected : NO_PEER_CONNECTED,
       ),
-    [summary, sessions, peers, peerKinds, peerConnected, environments, localName],
+    [summary, sessions, peers, peerKinds, peerConnected, pickerEnabled, localName],
   );
   const initialComputer = computerId(summary);
   // A pick in the Computer menu holds until the chat or its computer changes; then the new chat's
@@ -203,9 +204,9 @@ export function ComposerContext({
   };
   // A started chat's picker lists only where it runs and its move (EnvironmentPicker `offload`).
   const offload: OffloadKind | undefined = started && environments && onOffload ? offloads[0] : undefined;
-  const computerDisabled = readOnly && !offload && (started || !onConnect);
-  // Preview (`labs.previewFeatures`): the computer control is the environment picker.
-  const environmentsShown = environments && !computerDisabled;
+  const computerDisabled = readOnly && !offload && !onBrowseFolder;
+  // New Tab and started chats use the same environment picker; preview controls it for fresh chats.
+  const environmentsShown = pickerEnabled && !computerDisabled;
   const savedRows = environmentsShown && !readOnly ? saved : undefined;
   const savedPick = savedRows?.environments.find((environment) => environment.id === savedRows.current);
   const pickEnvironment = (id: string) => {
@@ -319,6 +320,7 @@ export function ComposerContext({
               onPick={pickEnvironment}
               {...(offload && onOffload ? { offload, onOffload } : {})}
               {...(!started && onConnect ? { onConnect } : {})}
+              {...(started && browseNewChat ? { onBrowseFolder: browseNewChat } : {})}
               {...(savedRows ? { saved: savedRows } : {})}
               {...(onRefreshMachines ? { onOpen: onRefreshMachines } : {})}
             />
