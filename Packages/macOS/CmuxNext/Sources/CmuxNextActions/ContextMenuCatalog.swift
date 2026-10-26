@@ -105,8 +105,13 @@ public nonisolated struct ContextMenuCatalog: Sendable {
     /// The cmux items after an engine's own page menu (Chromium lists Back,
     /// Forward and Reload itself): the page menu without that group.
     public var browserPageAfterEngineMenu: [ContextMenuEntry] {
+        Self.afterEngineMenu(entries(for: .browserPage))
+    }
+
+    /// A page menu (`entries`) without the navigation rows an engine's own menu lists.
+    static func afterEngineMenu(_ entries: [ContextMenuEntry]) -> [ContextMenuEntry] {
         let navigation: Set<ActionID> = ["browserBack", "browserForward", "browserReload"]
-        var entries = entries(for: .browserPage).filter { if case .action(let id) = $0 { !navigation.contains(id) } else { true } }
+        var entries = entries.filter { if case .action(let id) = $0 { !navigation.contains(id) } else { true } }
         while case .separator? = entries.first { entries.removeFirst() }
         return entries
     }

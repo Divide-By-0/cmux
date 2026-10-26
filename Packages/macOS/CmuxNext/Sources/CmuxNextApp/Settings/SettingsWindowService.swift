@@ -25,6 +25,11 @@ final class SettingsWindowService: InternalPageProvider {
         self.services = services
     }
 
+    /// Settings > Menus with `context`'s menu selected.
+    static func menusRoute(_ context: ActionMenuContext) -> String {
+        "#/settings/menus?focus=\(context.rawValue)"
+    }
+
     /// The window whose tab shows Settings, if any.
     var window: NSWindow? {
         services.pages.window(showing: .settings, windows: services.windows.controllers)?.window

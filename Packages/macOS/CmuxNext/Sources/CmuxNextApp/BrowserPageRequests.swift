@@ -167,12 +167,14 @@ final class BrowserPageRequests: BrowserTabDelegate {
             if let insert = request.insertLeading { return insert(leading) }
             let target = ActionTargetRef(kind: .tab, id: key)
             let host = services.registry.makeContextMenu(for: .browserPage, target: target,
-                                                         entries: ContextMenuCatalog.shared.browserPageAfterEngineMenu,
+                                                         entries: services.registry.browserPageAfterEngineMenu,
                                                          implied: .browserFocused)
             let extra = BrowserProfileLinkMenu.items(for: request.target.linkURL, target: ActionTargetRef(kind: .pane, id: pane.id),
                                                      services: services) + host.items + PageShareMenu.items(for: page.state.url)
             host.removeAllItems()
-            services.contextMenus.present(request, in: page.contentView, leading: leading, extra: extra)
+            // The engine's menu holds the page rows: Customize Menu… ends it as it ends every whole menu.
+            let customize = services.registry.customizeMenuItem(for: .browserPage).map { [NSMenuItem.separator(), $0] } ?? []
+            services.contextMenus.present(request, in: page.contentView, leading: leading, extra: extra + customize)
         case .notice(let text):
             services.cache.existingBrowser(key)?.chrome.showNotice(text)
         case .download(let item):

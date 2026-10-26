@@ -44,6 +44,14 @@ final class SettingsBackdropThumbnails: PageDynamicResourceSource {
             cache[key] = data
             return PageResource(data: data, mimeType: "image/png")
         }
+        // Settings > Menus: a row's SF Symbol (MenuSymbolImages).
+        if request.prefix == MenuSymbolImages.prefix, request.path.count == 1, let name = request.path[0].removingPercentEncoding {
+            let key = MenuSymbolImages.prefix + "/" + name
+            if let data = cache[key] { return PageResource(data: data, mimeType: "image/png") }
+            guard let data = MenuSymbolImages.png(name) else { return nil }
+            cache[key] = data
+            return PageResource(data: data, mimeType: "image/png")
+        }
         guard request.prefix == Self.prefix, request.path.count == 1,
               let id = request.path[0].removingPercentEncoding, let selection = BackdropSelection(id: id),
               allowed.contains(id) || refreshedAllowed(id) || userImages?.contains(selection) == true else { return nil }

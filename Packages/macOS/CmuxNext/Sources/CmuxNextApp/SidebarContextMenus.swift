@@ -31,11 +31,12 @@ enum SidebarContextMenus {
             // Dismiss Highlight shows only while the row's workspace draws an attention ring (cx-epgo).
             let highlighted = services.daemon.store.workspaces.first { $0.id == first.rawValue }.map(services.notifications.hasHighlight) ?? false
             // Several selected rows get Chrome's menu for several tabs (ContextMenuEssentials.selectionMenus).
-            let catalog = ContextMenuCatalog.shared, selection = ids.count > 1
-            let all = selection ? catalog.selectionEntries(for: .workspaceRow) : catalog.entries(for: .workspaceRow)
+            // The one-row menu is the person's arrangement (Settings > Menus); the selection menu is not arranged.
+            let selection = ids.count > 1
+            let all = selection ? ContextMenuCatalog.shared.selectionEntries(for: .workspaceRow) : registry.contextMenuEntries(for: .workspaceRow)
             let entries = highlighted ? all : ContextMenuCatalog.removing(["notifications.dismissHighlight"], from: all)
             let target = ActionTargetRef(kind: .workspace, id: first.rawValue)
-            let menu = registry.makeContextMenu(for: .workspaceRow, target: target, entries: entries)
+            let menu = registry.makeContextMenu(for: .workspaceRow, target: target, entries: entries, customize: !selection)
             // The name field renames the clicked row only, so a multi-row selection gets just the swatches.
             // A pinned workspace's tile has no row in the list model; its name comes from the workspace.
             let title = model.workspace(first)?.title ?? services.workspace(id: first.rawValue)?.displayName ?? ""
@@ -76,8 +77,11 @@ enum SidebarContextMenus {
             return registry.makeContextMenu(for: .sidebarBackground).themeRows(in: scope)
         case .footer:
             // Show for each piece hidden from the band (cx-wab7m); with none hidden, the sidebar's menu.
-            let band: NSMenu? = registry.makeContextMenu(for: .sidebarFooter)
-            if let band, band.items.contains(where: { !$0.isSeparatorItem }) { return band.themeRows(in: scope) }
+            let band = registry.makeContextMenu(for: .sidebarFooter, customize: false)
+            if band.items.contains(where: { !$0.isSeparatorItem }) {
+                registry.appendCustomizeItem(to: band, for: .sidebarFooter)
+                return band.themeRows(in: scope)
+            }
             return registry.makeContextMenu(for: .sidebarBackground).themeRows(in: scope)
         case .profile(let id):
             return registry.makeContextMenu(for: .profile, target: ActionTargetRef(kind: .profile, id: id.rawValue)).themeRows(in: scope)
@@ -122,7 +126,8 @@ enum SidebarContextMenus {
         } else {
             registry.makeContextMenu(for: .cloudMachine, target: target)
         }
-        let shared = registry.makeContextMenu(for: .machineSection, target: target)
+        // Its rows join the header's menu, which ends with its own Customize Menu….
+        let shared = registry.makeContextMenu(for: .machineSection, target: target, customize: false)
         let items = shared.items
         shared.removeAllItems()
         guard !items.isEmpty else { return menu }
