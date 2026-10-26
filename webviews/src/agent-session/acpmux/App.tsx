@@ -5122,7 +5122,7 @@ function AcpmuxPane() {
   const [displayAnchor, setDisplayAnchor] = useState<HTMLElement | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deleteConfirmSession, setDeleteConfirmSession] = useState<string>();
-  const deleteInFlight = useRef<{ target: string; client: AcpmuxDirectClient; harness?: string }>();
+  const deleteInFlight = useRef<{ target: string; client: AcpmuxDirectClient; harness?: string }>(undefined);
   const inspectorOpener = useRef<HTMLElement | undefined>(undefined);
   const inspectorOpenRef = useRef(false);
   const inspectorHiddenSurfaceRef = useRef(false);
