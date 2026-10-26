@@ -4,17 +4,14 @@ import type { Play } from "../../../gallery/play";
 import type { ChatMenuItem } from "./ChatHeaderTools";
 import { ThreadTitle } from "./ThreadTitle";
 
-const menuRows = (): ChatMenuItem[] => [
+const menuRows = (move: "local" | "cloud"): ChatMenuItem[] => [
   { key: "rename", label: "Rename", icon: "action.edit", shortcutAction: "renameTab", onSelect: () => undefined },
   { key: "fork", label: "Fork", icon: "agent.fork", shortcutAction: "chat.fork", onSelect: () => undefined },
   {
     key: "move",
-    label: "Move to machine",
+    label: move === "local" ? "Move to Cloud" : "Bring Back Local",
     icon: "machine.remote",
-    children: [
-      { key: "local", label: "This Mac", onSelect: () => undefined },
-      { key: "remote", label: "Build Mac", onSelect: () => undefined },
-    ],
+    children: [{ key: move, label: move === "local" ? "Move to Cloud" : "Bring Back Local", onSelect: () => undefined }],
   },
   {
     key: "open",
@@ -27,21 +24,21 @@ const menuRows = (): ChatMenuItem[] => [
     ],
   },
   { key: "archive", label: "Archive", icon: "inbox", onSelect: () => undefined },
-  { key: "delete", label: "Delete", icon: "tab.close", disabled: true },
+  { key: "delete", label: "Delete", icon: "action.delete", onSelect: () => undefined },
 ];
 
-function TitleMenuGallery({ title }: { title: string }) {
+function TitleMenuGallery({ title, move, treatment }: { title: string; move: "local" | "cloud"; treatment: string }) {
   return (
-    <div className="acpmux-shell acpmux-thread-title-gallery">
+    <div className={`acpmux-shell acpmux-thread-title-gallery acpmux-thread-title-gallery--${treatment}`}>
       <header className="acpmux-header">
         <div className="acpmux-header-status-slot">
-          <ThreadTitle title={title} menu={menuRows} />
+          <ThreadTitle title={title} menu={() => menuRows(move)} />
         </div>
         <div className="acpmux-header-tools" />
       </header>
       <main className="acpmux-thread-title-gallery-copy">
         <p>Click the title to rename, fork, move or open this chat.</p>
-        <p className="acpmux-muted">Delete stays disabled until the host exposes a real chat-delete action.</p>
+        <p className="acpmux-muted">Move uses the chat’s existing Cloud transfer path; Delete uses archive and closes the tab.</p>
       </main>
     </div>
   );
@@ -52,7 +49,7 @@ const open: Play = async (ctx) => {
   await ctx.waitFor(() => ctx.document.querySelector('[role="menu"]'));
 };
 
-export default componentEntry<{ title: string }>({
+export default componentEntry<{ title: string; move: "local" | "cloud"; treatment: string }>({
   id: "agent-pane.thread-title",
   title: "Chat title menu",
   area: "Agent pane",
@@ -67,20 +64,24 @@ export default componentEntry<{ title: string }>({
   styles: () => Promise.all([import("../styles.css"), import("./header.css"), import("./ThreadTitle.gallery.css")]),
   load: async () => TitleMenuGallery,
   variants: {
-    short: {
-      props: { title: "Phone to computer connection" },
+    "local-plain": {
+      props: { title: "Phone to computer connection", move: "local", treatment: "plain" },
       play: open,
-      note: "The title is a button with a chevron; click opens the instant glass action menu.",
+      note: "Local chat: Move to Cloud is the real transfer action, and Delete archives then closes the tab.",
     },
-    long: {
-      props: { title: "Investigate the flaky reconnect path across the build fleet" },
+    "remote-glass": {
+      props: { title: "Review remote agent output", move: "cloud", treatment: "glass" },
       play: open,
-      note: "Long titles ellipsize inside the control while the chevron and header stay in place.",
+      note: "Cloud chat: Bring Back Local uses the same existing transfer path as the environment picker.",
     },
-    remote: {
-      props: { title: "Review remote agent output" },
+    "compact-long": {
+      props: {
+        title: "Investigate the flaky reconnect path across the build fleet",
+        move: "local",
+        treatment: "compact",
+      },
       play: open,
-      note: "Move to machine and Open in use nested submenus, matching the existing header menu grid.",
+      note: "Narrow header treatment: a long title ellipsizes while the chevron and action menu remain reachable.",
     },
   },
 });

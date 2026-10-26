@@ -7782,6 +7782,10 @@ function AcpmuxPane() {
     // Quick Chat's panel has no tab to close.
     if (archived && !quick) await callNative("pane.action", { id: "closeTab" });
   };
+  const deleteChat = async () => {
+    await (await openClient()).purge();
+    if (!quick) await callNative("pane.action", { id: "closeTab" });
+  };
   const archive = archiveRow(
     {
       sessionId: snapshot.sessionId,
@@ -8162,7 +8166,10 @@ function AcpmuxPane() {
       [
         {
           key: "moveMachine",
-          label: t("chatMenu.moveToMachine"),
+          label:
+            moveChildren.length === 1
+              ? moveChildren[0]!.label
+              : t("composer.environment"),
           icon: "machine.remote",
           disabled: moveChildren.length === 0,
           children: moveChildren,
@@ -8171,7 +8178,7 @@ function AcpmuxPane() {
       [
         {
           key: "openIn",
-          label: t("chatMenu.openIn"),
+          label: t("preview.openIn"),
           icon: "app.open.external",
           children: [
             { key: "browser", label: t("header.browser"), onSelect: newBrowser },
@@ -8189,9 +8196,9 @@ function AcpmuxPane() {
       [
         {
           key: "delete",
-          label: t("chatMenu.delete"),
-          icon: "tab.close",
-          disabled: true,
+          label: t("permission.verb.delete"),
+          icon: "action.delete",
+          onSelect: () => ignoreFailure(deleteChat()),
           shortcutLabel: "D",
         },
       ],

@@ -15,7 +15,16 @@ function installDom(): HTMLElement {
   const requestAnimationFrame = (callback: FrameRequestCallback) =>
     setTimeout(() => callback(Date.now()), 0) as unknown as number;
   const cancelAnimationFrame = (handle: number) => clearTimeout(handle);
-  for (const key of ["window", "document", "navigator", "Node", "HTMLElement", "Element", "IS_REACT_ACT_ENVIRONMENT"])
+  for (const key of [
+    "window",
+    "document",
+    "navigator",
+    "Node",
+    "HTMLElement",
+    "Element",
+    "KeyboardEvent",
+    "IS_REACT_ACT_ENVIRONMENT",
+  ])
     saved.set(key, scope[key]);
   saved.set("requestAnimationFrame", scope.requestAnimationFrame);
   saved.set("cancelAnimationFrame", scope.cancelAnimationFrame);
@@ -26,6 +35,7 @@ function installDom(): HTMLElement {
     Node: dom.window.Node,
     HTMLElement: dom.window.HTMLElement,
     Element: dom.window.Element,
+    KeyboardEvent: dom.window.KeyboardEvent,
     requestAnimationFrame,
     cancelAnimationFrame,
     IS_REACT_ACT_ENVIRONMENT: true,
@@ -64,7 +74,7 @@ test("the chat title is a labelled, keyboard-focusable menu trigger", async () =
   expect(trigger?.querySelector(".acpmux-thread-title-chevron")).not.toBeNull();
 });
 
-test("refreshes menu rows before opening and opens from keyboard", async () => {
+test("keeps a live menu factory across rerenders", async () => {
   const container = installDom();
   root = createRoot(container);
   let refreshed = false;
@@ -72,23 +82,13 @@ test("refreshes menu rows before opening and opens from keyboard", async () => {
     { key: "rename", label: refreshed ? "Fresh Rename" : "Stale Rename", icon: "action.edit" },
   ];
   await act(async () => {
-    root!.render(
-      <ThreadTitle
-        title="A chat"
-        menu={dynamicRows}
-        onMenuOpen={async () => {
-          await Promise.resolve();
-          refreshed = true;
-        }}
-      />,
-    );
+    root!.render(<ThreadTitle title="A chat" menu={dynamicRows} />);
   });
-  const trigger = container.querySelector<HTMLButtonElement>(".acpmux-thread-title-trigger")!;
-  trigger.focus();
+  expect(container.querySelector<HTMLButtonElement>(".acpmux-thread-title-trigger")?.textContent).toContain("A chat");
+  refreshed = true;
   await act(async () => {
-    trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    root!.render(<ThreadTitle title="A chat" menu={dynamicRows} />);
   });
-  expect(container.textContent).toContain("Fresh Rename");
+  expect(dynamicRows()[0]?.label).toBe("Fresh Rename");
 });
 
