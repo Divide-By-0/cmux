@@ -12,13 +12,17 @@ await requireBrowserLane("page-commands-palette.test.ts", async () => {
   setDefaultTimeout(180_000);
   let browser: Browser;
   let pane: Awaited<ReturnType<typeof papercutPane>>;
+  // A Claude Code chat running two commands in the foreground: Ctrl-B has something to move.
+  let running: Awaited<ReturnType<typeof papercutPane>>;
   beforeAll(async () => {
     browser = await chromium.launch({ headless: true });
     pane = await papercutPane(() => browser, { turns: 2, running: false });
+    running = await papercutPane(() => browser, { turns: 1, running: true, session: { backgroundsWork: true } });
   });
   afterAll(async () => {
     await browser?.close();
     await pane?.close();
+    await running?.close();
   });
 
   // The App's side of `pane.commandAvailability` and `pane.action`: recorded, in every actions map
@@ -54,6 +58,25 @@ await requireBrowserLane("page-commands-palette.test.ts", async () => {
         (window as unknown as { nativeCalls: NativeCall[] }).nativeCalls.filter((call) => call.method === method),
       method,
     );
+  // Until the page's latest `pane.commandAvailability` lists exactly `commands`.
+  const offers = (page: Page, commands: string) =>
+    page.waitForFunction(
+      (commands) =>
+        (window as unknown as { nativeCalls: NativeCall[] }).nativeCalls
+          .filter((call) => call.method === "pane.commandAvailability")
+          .at(-1)
+          ?.params.commands?.toString() === commands,
+      commands,
+      { timeout: 10_000 },
+    );
+  // Whether the stand-in daemon heard `method`, within about a second of frames.
+  const heard = async (page: Page, method: string) => {
+    for (let tries = 0; tries < 60; tries++) {
+      if (running.methods.includes(method)) return true;
+      await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => done())));
+    }
+    return false;
+  };
   // Until the page made `count` calls of `method`.
   const made = (page: Page, method: string, count: number) =>
     page.waitForFunction(
@@ -67,16 +90,9 @@ await requireBrowserLane("page-commands-palette.test.ts", async () => {
   test("the page offers the header's toggles its chat has, and runs each like its button", async () => {
     const page = await pane.open({ width: 1200, height: 760 }, record);
     try {
-      // A local chat with no page to preview: Files and the tabs beside it, not Preview.
-      await page.waitForFunction(
-        () =>
-          (window as unknown as { nativeCalls: NativeCall[] }).nativeCalls
-            .filter((call) => call.method === "pane.commandAvailability")
-            .at(-1)
-            ?.params.commands?.toString() === "toggleFiles,toggleSideTabs",
-        undefined,
-        { timeout: 10_000 },
-      );
+      // A local chat with no page to preview and nothing running: Files and the tabs beside it, not
+      // Preview; queueing, which every chat has.
+      await offers(page, "toggleFiles,toggleQueueing,toggleSideTabs");
 
       await page.evaluate(() => window.cmuxAcpmuxBridge!.command!("toggleFiles"));
       await made(page, "pane.action", 1);
@@ -101,8 +117,33 @@ await requireBrowserLane("page-commands-palette.test.ts", async () => {
       pane.drop();
       await made(page, "pane.commandAvailability", before + 1);
       expect((await calls(page, "pane.commandAvailability")).at(-1)?.params).toEqual({
-        commands: ["toggleFiles", "toggleSideTabs"],
+        commands: ["toggleFiles", "toggleQueueing", "toggleSideTabs"],
       });
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("queueing's toggle turns it off and on, as a queued row's menu does", async () => {
+    const page = await pane.open({ width: 1200, height: 760 }, record);
+    try {
+      await offers(page, "toggleFiles,toggleQueueing,toggleSideTabs");
+      const stored = () => page.evaluate(() => localStorage.getItem("cmux.acpmux.queueing"));
+      await page.evaluate(() => window.cmuxAcpmuxBridge!.command!("toggleQueueing"));
+      expect(await stored()).toBe("off");
+      await page.evaluate(() => window.cmuxAcpmuxBridge!.command!("toggleQueueing"));
+      expect(await stored()).toBeNull();
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("Run in Background is offered while work runs in the foreground, and sends Ctrl-B's move", async () => {
+    const page = await running.open({ width: 1200, height: 760 }, record);
+    try {
+      await offers(page, "runInBackground,toggleFiles,toggleQueueing,toggleSideTabs");
+      await page.evaluate(() => window.cmuxAcpmuxBridge!.command!("runInBackground"));
+      expect(await heard(page, "_acpmux/process/background")).toBe(true);
     } finally {
       await page.close();
     }

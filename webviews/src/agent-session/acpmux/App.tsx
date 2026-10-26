@@ -436,6 +436,7 @@ import { useSideSessions } from "./aside/sideSessions";
 import { ReceivedResult, SuggestedTasks, type OfferActions } from "./offer/SuggestedTasks";
 import { OFFER_RESULT, setSuggestedTasks } from "./offer/offersShown";
 import { offerWorktree } from "./offer/offerWorktree";
+import { queueingOn, setQueueing } from "./queueing";
 import {
   NO_MENTIONS,
   StartedMentionsContext,
@@ -7839,6 +7840,15 @@ function AcpmuxPane() {
   if (!quick && localCwd) commands.toggleFiles = () => runSplitAction(HEADER_ACTIONS.files, localCwd, "toggle");
   if (!quick && (previewUrl || litSplits.includes(HEADER_ACTIONS.preview)))
     commands.togglePreview = () => togglePreview(previewUrl);
+  // Ctrl-B's move, while it has something to move; queueing's toggle, as a queued row's ⋯ menu has it.
+  if (!quick && (foreground.length > 0 || foregroundAgent)) commands.runInBackground = () => runInBackground();
+  commands.toggleQueueing = () => setQueueing(!queueingOn());
+  // Session Info opened at a section, while the chat's own Inspector has rows there.
+  const revealSection = inspector.reveal;
+  if (revealSection && shownSubagent === undefined && trayAgents.length + childSessions.length > 0)
+    commands.showSubagents = () => revealSection("subagents");
+  if (revealSection && (runningCommandList.length > 0 || workflows.some((workflow) => workflow.state === "running")))
+    commands.showBackgroundTasks = () => revealSection("tasks");
   paletteCommands.current = commands;
   const commandNames = Object.keys(commands).sort().join(" ");
   // Again for every client: the host's handshake (a reconnect's too) forgets the list, and a new
