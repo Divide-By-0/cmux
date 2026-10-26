@@ -8,6 +8,7 @@
 // pair, so the page's calls cross the real envelope (call/ok/err/sub/ev).
 import { createMockPair } from "../../protocol/adapters/mock";
 import { updatable } from "./harnesses";
+import { mockContextMenus, setMockMenuLayout } from "./mockMenus";
 import { recentAfterPick } from "./fontPickerModel";
 import { ProtocolError, ProtocolErrorCode } from "../../protocol/errors";
 import { Session, type EventSourceContext } from "../../protocol/session";
@@ -27,6 +28,7 @@ import {
   type DevicesRun,
   type DevicesRunResult,
   type DevicesState,
+  type MenuLayout,
   type HarnessesRun,
   type HarnessesState,
   type IntegrationsRun,
@@ -251,6 +253,16 @@ export class MockSettingsProvider {
       },
       "cmux.settings.agents.state": () => this.agents.state,
       "cmux.settings.agents.run": (params) => this.agents.run(params as unknown as AgentsRun),
+      "cmux.settings.context_menus.set": (params) => {
+        const menus = this.host.context_menus;
+        if (menus) this.setHost({ ...this.host, context_menus: setMockMenuLayout(menus, params.menu as string, (params.layout as MenuLayout | null) ?? null) });
+        return {};
+      },
+      "cmux.settings.context_menus.show_item": (params) => {
+        const menus = this.host.context_menus;
+        if (menus) this.setHost({ ...this.host, context_menus: { ...menus, show_customize_item: params.show === true } });
+        return {};
+      },
       "cmux.settings.voice_input.set": (params) => {
         if (this.host.voice_input) this.setHost({ ...this.host, voice_input: { on: params.on === true } });
         return {};
@@ -827,6 +839,7 @@ export class MockSettingsProvider {
     },
     // A DEV build: the home.voiceInput tunable exists, on as Leo set it.
     voice_input: { on: true },
+    context_menus: mockContextMenus(),
     browser_profiles: [
       { id: "p-default", name: "Default", color: null, icon: null, is_default: true, source: null },
       { id: "p-work", name: "Work", color: "green", icon: null, is_default: false, source: "Google Chrome · Work" },

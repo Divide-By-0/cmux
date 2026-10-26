@@ -1660,3 +1660,250 @@ mark {
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
+
+/* Settings > Menus (ContextMenusCard): the list of menus beside the chosen menu, drawn as a menu.
+   Rows reorder by drag (data-drop marks where a row lands) or by their buttons, which show on
+   hover and keyboard focus. */
+.menus-editor {
+  display: grid;
+  grid-template-columns: minmax(150px, 190px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.menus-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: sticky;
+  top: 0;
+}
+
+.menus-area {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.menus-area-title {
+  margin: 0 0 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted-text);
+}
+
+.menus-list-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: start;
+  cursor: default;
+}
+
+.menus-list-item:hover {
+  background: var(--input-bg);
+}
+
+.menus-list-item[aria-current] {
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+.menus-list-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.menus-edited {
+  margin-inline-start: auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.menus-detail {
+  min-width: 0;
+}
+
+.menus-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.menus-detail-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.menus-detail-spacer {
+  flex: 1;
+}
+
+.menus-help {
+  margin: 4px 0 10px;
+}
+
+/* The menu itself: a rounded panel of 24 px rows, as macOS draws a context menu. */
+.menu-preview,
+.menu-children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.menu-preview {
+  padding: 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--cmux-surface-solid, light-dark(rgba(246, 246, 246, 1), rgba(40, 40, 42, 1)));
+  box-shadow: 0 8px 24px light-dark(rgba(0, 0, 0, 0.12), rgba(0, 0, 0, 0.45));
+  max-width: 420px;
+}
+
+.menu-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0 4px 0 2px;
+  border-radius: 5px;
+  position: relative;
+}
+
+.menu-row:hover,
+.menu-row:focus-within {
+  background: var(--input-bg);
+}
+
+.menu-row[data-dragging] {
+  opacity: 0.4;
+}
+
+.menu-row[data-drop]::before,
+.menu-drop-end[data-drop]::before {
+  content: "";
+  position: absolute;
+  inset: -2px 6px auto;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+
+.menu-row[data-key="folder:more"][data-drop] {
+  background: var(--accent-soft);
+}
+
+.menu-row[data-key="folder:more"][data-drop]::before {
+  content: none;
+}
+
+.menu-drop-end {
+  height: 8px;
+  position: relative;
+}
+
+.menu-row-grip {
+  display: inline-flex;
+  color: var(--soft-text);
+  cursor: grab;
+}
+
+.menu-row-icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  mask: center / contain no-repeat;
+  -webkit-mask: center / contain no-repeat;
+}
+
+.menu-row-icon:not([data-symbol]) {
+  background: none;
+}
+
+.menu-row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.menu-disclosure {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+}
+
+.menu-row-chevron {
+  color: var(--muted-text);
+}
+
+.menu-row-actions {
+  display: inline-flex;
+  gap: 1px;
+  opacity: 0;
+}
+
+.menu-row:hover .menu-row-actions,
+.menu-row:focus-within .menu-row-actions {
+  opacity: 1;
+}
+
+.menu-separator .menu-separator-line {
+  flex: 1;
+  height: 1px;
+  margin: 0 6px;
+  background: var(--border-strong);
+}
+
+.menu-nested {
+  padding-inline-start: 22px;
+  border-inline-start: 1px solid var(--border);
+  margin: 1px 0 3px 14px;
+}
+
+.menu-child .menu-row-grip {
+  visibility: visible;
+}
+
+.menu-empty {
+  padding: 3px 8px;
+  color: var(--soft-text);
+  font-size: 12px;
+}
+
+.menus-hidden {
+  margin-top: 14px;
+  max-width: 420px;
+}
+
+.menus-hidden .menu-row {
+  color: var(--muted-text);
+}
+
+@media (max-width: 640px) {
+  .menus-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .menus-list {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}

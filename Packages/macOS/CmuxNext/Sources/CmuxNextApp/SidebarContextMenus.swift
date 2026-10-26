@@ -131,7 +131,8 @@ enum SidebarContextMenus {
         let items = shared.items
         shared.removeAllItems()
         guard !items.isEmpty else { return menu }
-        if menu.items.filter({ !$0.isSeparatorItem }).count >= Self.topLevelLimit,
+        // Customize Menu… ends every menu and is not one of its rows (topLevelLimit counts rows).
+        if menu.items.filter({ !$0.isSeparatorItem && !ActionRegistry.isCustomizeItem($0) }).count >= Self.topLevelLimit,
            let options = menu.items.first(where: { $0.title == MenuFolder.options.title })?.submenu {
             options.addItem(.separator())
             for item in items { options.addItem(item) }
