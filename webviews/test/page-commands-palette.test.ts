@@ -194,7 +194,12 @@ await requireBrowserLane("page-commands-palette.test.ts", async () => {
           window as unknown as { cmuxAcpmuxBridge: { applyHeaderState(state: unknown): void } }
         ).cmuxAcpmuxBridge.applyHeaderState({ inspector: true, version: 2 }),
       );
-      await offers(page, "showBackgroundTasks,showSubagents,toggleFiles,toggleQueueing,toggleSideTabs");
+      await offers(page, "showBackgroundTasks,showSubagents,toggleFiles,toggleQueueing,toggleSideTabs").catch(
+        async (error: unknown) => {
+          const last = (await calls(page, "pane.commandAvailability")).at(-1)?.params.commands;
+          throw new Error(`offered ${String(last)}`, { cause: error });
+        },
+      );
       const shown = page.locator('aside.acpmux-chat-inspector[data-presence="shown"]');
       await page.evaluate(() => window.cmuxAcpmuxBridge!.command!("showBackgroundTasks"));
       await shown.locator('[data-section="tasks"]').waitFor({ timeout: 10_000 });
