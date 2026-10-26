@@ -5121,6 +5121,7 @@ function AcpmuxPane() {
   // The ··· menu's Text & Width popover (ChatDisplaySettings.tsx), anchored to the menu button.
   const [displayAnchor, setDisplayAnchor] = useState<HTMLElement | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleteConfirmSession, setDeleteConfirmSession] = useState<string>();
   const inspectorOpener = useRef<HTMLElement | undefined>(undefined);
   const inspectorOpenRef = useRef(false);
   const inspectorHiddenSurfaceRef = useRef(false);
@@ -7792,11 +7793,25 @@ function AcpmuxPane() {
     if (archived && !quick) await callNative("pane.action", { id: "closeTab" });
   };
   const deleteChat = async () => {
-    await (await openClient()).purge();
+    const target = deleteConfirmSession;
+    const client = directClient.current;
+    if (!target || target !== snapshot.sessionId || !client) return;
+    await client.purge();
     setDeleteConfirmOpen(false);
+    setDeleteConfirmSession(undefined);
     if (!quick) await callNative("pane.action", { id: "closeTab" });
   };
-  const requestDelete = () => setDeleteConfirmOpen(true);
+  const requestDelete = () => {
+    if (!snapshot.sessionId) return;
+    setDeleteConfirmSession(snapshot.sessionId);
+    setDeleteConfirmOpen(true);
+  };
+  useEffect(() => {
+    if (deleteConfirmSession && deleteConfirmSession !== snapshot.sessionId) {
+      setDeleteConfirmSession(undefined);
+      setDeleteConfirmOpen(false);
+    }
+  }, [deleteConfirmSession, snapshot.sessionId]);
   const archive = archiveRow(
     {
       sessionId: snapshot.sessionId,
@@ -9916,14 +9931,25 @@ function AcpmuxPane() {
         )}
         <Dialog
           open={deleteConfirmOpen}
-          onOpenChange={setDeleteConfirmOpen}
+          onOpenChange={(next) => {
+            setDeleteConfirmOpen(next);
+            if (!next) setDeleteConfirmSession(undefined);
+          }}
           label={t("permission.verb.delete")}
           className="acpmux-delete-dialog"
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" || (event.target as HTMLElement).closest("button")) return;
+            event.preventDefault();
+            ignoreFailure(deleteChat());
+          }}
         >
           <h2>{t("permission.verb.delete")}</h2>
           <p>{t("chatMenu.deleteConfirmBody")}</p>
           <div className="acpmux-delete-dialog-actions">
-            <DialogButton dialogKey="escape" onClick={() => setDeleteConfirmOpen(false)}>
+            <DialogButton dialogKey="escape" onClick={() => {
+              setDeleteConfirmOpen(false);
+              setDeleteConfirmSession(undefined);
+            }}>
               {t("chatMenu.close")}
             </DialogButton>
             <DialogButton

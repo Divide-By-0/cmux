@@ -654,7 +654,7 @@ export function ChatMenu({
     event.preventDefault();
     event.stopPropagation();
     item.onSelect();
-    setOpen(false);
+    onOpenChange(false);
   };
   const buttonLabel = triggerLabel ?? label;
   return (
