@@ -222,10 +222,12 @@ final class ScreenContentView: NSView {
         reconcileDepth += 1
         defer {
             reconcileDepth -= 1
-            guard reconcileDepth == 0, backingChangePending else { return }
-            backingChangePending = false
-            guard window != nil, reconciledScale != scale else { return }
-            reconcileAndScroll()
+            if reconcileDepth == 0, backingChangePending {
+                backingChangePending = false
+                if window != nil, reconciledScale != scale {
+                    reconcileAndScroll()
+                }
+            }
         }
         let shown = rowDragPreview.map { layout.settingRowHeights($0.heights, for: $0.column) } ?? layout
         let before = geometry
