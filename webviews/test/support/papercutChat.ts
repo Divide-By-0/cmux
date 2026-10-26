@@ -95,9 +95,10 @@ export function papercutEvents({
   return { events, session };
 }
 
-/// Starts the stand-in daemon and the dev server; returns `open`, `close` and `methods`. `open` waits
+/// Starts the stand-in daemon and the dev server; returns `open`, `close`, `drop` and `methods`. `open` waits
 /// for the last answer, or for `ready` (a selector) when the chat's end shows something else;
-/// `methods` lists every method the pages sent the daemon, in order (a stop is `session/cancel`).
+/// `methods` lists every method the pages sent the daemon, in order (a stop is `session/cancel`);
+/// `drop` closes every page's socket, as an acpmux restart does, and the pages connect again.
 export async function papercutPane(
   browser: () => Browser,
   options: {
@@ -114,6 +115,7 @@ export async function papercutPane(
   const webviews = path.resolve(import.meta.dir, "../..");
   const { events, session } = papercutEvents(options);
   const methods: string[] = [];
+  const sockets = new Set<{ close(code?: number, reason?: string): void }>();
   const answer = (method: string): unknown => {
     switch (method) {
       case "initialize":
@@ -135,6 +137,12 @@ export async function papercutPane(
       return server.upgrade(request, { data: undefined }) ? undefined : new Response("acpmux", { status: 426 });
     },
     websocket: {
+      open(ws) {
+        sockets.add(ws);
+      },
+      close(ws) {
+        sockets.delete(ws);
+      },
       message(ws, raw) {
         const message = JSON.parse(String(raw)) as { id?: number; method: string };
         methods.push(message.method);
@@ -196,7 +204,10 @@ export async function papercutPane(
     await vite.close();
     await daemon.stop(true);
   };
-  return { open, close, methods };
+  const drop = () => {
+    for (const socket of sockets) socket.close(1012, "restart");
+  };
+  return { open, close, drop, methods };
 }
 
 /// Settings > Agent Chat > Inspector: Push always (or back to the default), as the host's `display`
