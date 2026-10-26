@@ -194,6 +194,28 @@ extension PageWebView {
         return true
     }
 
+    /// A trusted DevTools left-button drag on a Chromium page, in CSS pixels: press at `from`,
+    /// `steps` moves to `to`, release, each sent once Chromium answered the one before. The
+    /// page's pointer handlers (capture, a reorder's drop) see a person's drag; a capture slot's
+    /// window never activates, so no AppKit event reaches it. False on a WebKit page or when
+    /// DevTools refuses an event.
+    public func debugDrag(from: CGPoint, to: CGPoint, steps: Int = 16) async -> Bool {
+        guard let page = chromiumSession?.page else { return false }
+        func send(_ type: String, _ point: CGPoint, buttons: Int) async -> Bool {
+            (try? await page.devTools("Input.dispatchMouseEvent", params: [
+                "type": type, "x": point.x, "y": point.y, "button": "left", "buttons": buttons, "clickCount": 1, "modifiers": 0,
+            ])) != nil
+        }
+        guard await send("mousePressed", from, buttons: 1) else { return false }
+        let count = max(1, steps)
+        for step in 1...count {
+            let t = Double(step) / Double(count)
+            let point = CGPoint(x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t)
+            guard await send("mouseMoved", point, buttons: 1) else { return false }
+        }
+        return await send("mouseReleased", to, buttons: 0)
+    }
+
     /// Every element matching `selector` in document order: its `data-*` attributes, classes and
     /// first 120 characters of text (a list's order and row state as the page draws it).
     public func debugQuery(_ selector: String) async -> JSONValue {
