@@ -340,6 +340,8 @@ import { sessionLink } from "./links";
 import { ChatHeaderInlineStatus, ChatHeaderStatus } from "./header/ChatHeaderStatus";
 import { ChatHeaderTools, HEADER_ACTIONS, menuGroups, type ChatMenuItem } from "./header/ChatHeaderTools";
 import { ThreadTitle } from "./header/ThreadTitle";
+import { Dialog } from "../../ui/Dialog";
+import { DialogButton } from "../../ui/DialogButton";
 import { EnvironmentLine, environmentOpener } from "./header/EnvironmentLine";
 import { headerState, setHeaderState, useHeaderState } from "./header/headerState";
 import { setTabRow, tabRowStyle, useTabRow, useTabRowTools } from "./header/tabRow";
@@ -5118,6 +5120,7 @@ function AcpmuxPane() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   // The ··· menu's Text & Width popover (ChatDisplaySettings.tsx), anchored to the menu button.
   const [displayAnchor, setDisplayAnchor] = useState<HTMLElement | null>(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const inspectorOpener = useRef<HTMLElement | undefined>(undefined);
   const inspectorOpenRef = useRef(false);
   const inspectorHiddenSurfaceRef = useRef(false);
@@ -7790,8 +7793,10 @@ function AcpmuxPane() {
   };
   const deleteChat = async () => {
     await (await openClient()).purge();
+    setDeleteConfirmOpen(false);
     if (!quick) await callNative("pane.action", { id: "closeTab" });
   };
+  const requestDelete = () => setDeleteConfirmOpen(true);
   const archive = archiveRow(
     {
       sessionId: snapshot.sessionId,
@@ -7968,6 +7973,7 @@ function AcpmuxPane() {
               icon: "agent.fork",
               ...(forkPrompts.length > 0
                 ? {
+                    onSelect: () => turnActions.fork?.(lastForkSeq),
                     children: [
                       {
                         key: "forkHere",
@@ -8227,7 +8233,7 @@ function AcpmuxPane() {
           key: "delete",
           label: t("permission.verb.delete"),
           icon: "action.delete",
-          onSelect: () => ignoreFailure(deleteChat()),
+          onSelect: requestDelete,
           shortcutLabel: "D",
         },
       ],
@@ -9908,6 +9914,27 @@ function AcpmuxPane() {
             onClose={() => setImageView(undefined)}
           />
         )}
+        <Dialog
+          open={deleteConfirmOpen}
+          onOpenChange={setDeleteConfirmOpen}
+          label={t("permission.verb.delete")}
+          className="acpmux-delete-dialog"
+        >
+          <h2>{t("permission.verb.delete")}</h2>
+          <p>{t("chatMenu.deleteConfirmBody")}</p>
+          <div className="acpmux-delete-dialog-actions">
+            <DialogButton dialogKey="escape" onClick={() => setDeleteConfirmOpen(false)}>
+              {t("chatMenu.close")}
+            </DialogButton>
+            <DialogButton
+              dialogKey="return"
+              className="acpmux-delete-dialog-confirm"
+              onClick={() => ignoreFailure(deleteChat())}
+            >
+              {t("permission.verb.delete")}
+            </DialogButton>
+          </div>
+        </Dialog>
       </section>
     </ShortcutsContext.Provider>
   );

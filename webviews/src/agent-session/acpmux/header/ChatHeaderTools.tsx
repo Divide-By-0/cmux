@@ -607,8 +607,22 @@ export function ChatMenu({
     };
     if (!onOpen) return ready();
     // The menu's labels read the tab's state; a host that does not answer quickly gets the rows anyway.
-    const timeout = new Promise((resolve) => window.setTimeout(resolve, 150));
-    void Promise.race([onOpen().catch(() => undefined), timeout]).then(ready);
+    let timer: number | undefined;
+    const apply = () => {
+      if (generation !== opening.current) return;
+      setRows(itemsRef.current());
+      setOnly(row);
+      setOpen(true);
+    };
+    timer = window.setTimeout(apply, 150);
+    void onOpen()
+      .catch(() => undefined)
+      .then(() => {
+        if (timer !== undefined) window.clearTimeout(timer);
+        // If the timeout opened the menu first, refresh the already-open rows from the latest
+        // factory. Native pane state can arrive after the 150 ms responsiveness bound.
+        apply();
+      });
   };
   const showRef = useRef(show);
   showRef.current = show;
@@ -635,7 +649,7 @@ export function ChatMenu({
   const onMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.key.length !== 1) return;
     const key = event.key.toUpperCase();
-    const item = menuItemForShortcut(shortcutRows, key);
+    const item = menuItemForShortcut(rows, key) ?? menuItemForShortcut(shortcutRows, key);
     if (!item || item.disabled || !item.onSelect) return;
     event.preventDefault();
     event.stopPropagation();
@@ -670,6 +684,7 @@ export function ChatMenu({
                     <>
                       <Icon name={row.icon} size={15} />
                       <span className="acpmux-chat-menu-label">{row.label}</span>
+                      {row.shortcutLabel && <kbd className="acpmux-chat-menu-key">{row.shortcutLabel}</kbd>}
                     </>
                   }
                 >
