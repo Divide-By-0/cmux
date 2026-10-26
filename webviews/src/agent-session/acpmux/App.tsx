@@ -7841,13 +7841,21 @@ function AcpmuxPane() {
   if (!quick && (previewUrl || litSplits.includes(HEADER_ACTIONS.preview)))
     commands.togglePreview = () => togglePreview(previewUrl);
   // Ctrl-B's move, while it has something to move; queueing's toggle, as a queued row's ⋯ menu has it.
-  if (!quick && (foreground.length > 0 || foregroundAgent)) commands.runInBackground = () => runInBackground();
+  // During a switch's hold the page still draws chat A while the client already selected B: the
+  // move waits for B to show, so A's command never moves B's work.
+  if (!quick && (foreground.length > 0 || foregroundAgent))
+    commands.runInBackground = () => {
+      if (directClient.current?.selectedSession === snapshotRef.current?.sessionId) runInBackground();
+    };
   commands.toggleQueueing = () => setQueueing(!queueingOn());
-  // Session Info opened at a section, while the chat's own Inspector has rows there.
+  // Session Info opened at a section, while the Inspector has rows there: a subagent's view lists
+  // its own subagents. Background tasks counts what the pane holds without reading its rows (the
+  // registry's servers and commands, the transcript's running ones, the workflows); finished and
+  // scheduled entries come from the Inspector's summary, which it reads only while drawn.
   const revealSection = inspector.reveal;
-  if (revealSection && shownSubagent === undefined && trayAgents.length + childSessions.length > 0)
-    commands.showSubagents = () => revealSection("subagents");
-  if (revealSection && (runningCommandList.length > 0 || workflows.some((workflow) => workflow.state === "running")))
+  const listedAgents = inspectorSubagent ? inspectorSubagent.agents.length : trayAgents.length + childSessions.length;
+  if (revealSection && listedAgents > 0) commands.showSubagents = () => revealSection("subagents");
+  if (revealSection && processRegistry.processes.length + transcriptRunning.length + workflows.length > 0)
     commands.showBackgroundTasks = () => revealSection("tasks");
   paletteCommands.current = commands;
   const commandNames = Object.keys(commands).sort().join(" ");

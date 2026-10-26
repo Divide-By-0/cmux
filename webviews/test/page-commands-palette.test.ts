@@ -14,15 +14,50 @@ await requireBrowserLane("page-commands-palette.test.ts", async () => {
   let pane: Awaited<ReturnType<typeof papercutPane>>;
   // A Claude Code chat running two commands in the foreground: Ctrl-B has something to move.
   let running: Awaited<ReturnType<typeof papercutPane>>;
+  // A chat with a subagent and a command still running in the background: Session Info has rows in
+  // Subagents and Background tasks.
+  let busy: Awaited<ReturnType<typeof papercutPane>>;
   beforeAll(async () => {
     browser = await chromium.launch({ headless: true });
     pane = await papercutPane(() => browser, { turns: 2, running: false });
     running = await papercutPane(() => browser, { turns: 1, running: true, session: { backgroundsWork: true } });
+    const update = (update: Record<string, unknown>, meta?: Record<string, unknown>) => ({
+      method: "session/update",
+      params: { sessionId: "agent-1", update, ...(meta ? { _meta: { acpmux: meta } } : {}) },
+    });
+    busy = await papercutPane(() => browser, {
+      turns: 1,
+      running: false,
+      extra: [
+        [
+          "in",
+          "subagent_spawned",
+          update(
+            { sessionUpdate: "subagent_spawned" },
+            {
+              subagents: [{ id: "sub-1", parent: null, name: "Reviewer", state: "running" }],
+            },
+          ),
+        ],
+        [
+          "in",
+          "background_task_update",
+          update({
+            sessionUpdate: "background_task_update",
+            taskId: "task-bg1",
+            toolCallId: "bg1",
+            command: "npm run dev",
+            state: "running",
+          }),
+        ],
+      ],
+    });
   });
   afterAll(async () => {
     await browser?.close();
     await pane?.close();
     await running?.close();
+    await busy?.close();
   });
 
   // The App's side of `pane.commandAvailability` and `pane.action`: recorded, in every actions map
@@ -144,6 +179,27 @@ await requireBrowserLane("page-commands-palette.test.ts", async () => {
       await offers(page, "runInBackground,toggleFiles,toggleQueueing,toggleSideTabs");
       await page.evaluate(() => window.cmuxAcpmuxBridge!.command!("runInBackground"));
       expect(await heard(page, "_acpmux/process/background")).toBe(true);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("Session Info's Subagents and Background tasks are offered while they have rows, and open there", async () => {
+    const page = await busy.open({ width: 1200, height: 760 }, record);
+    try {
+      // Without Session Info (Debug Settings `agent.inspector` off) there is no section to show.
+      await offers(page, "toggleFiles,toggleQueueing,toggleSideTabs");
+      await page.evaluate(() =>
+        (
+          window as unknown as { cmuxAcpmuxBridge: { applyHeaderState(state: unknown): void } }
+        ).cmuxAcpmuxBridge.applyHeaderState({ inspector: true, version: 2 }),
+      );
+      await offers(page, "showBackgroundTasks,showSubagents,toggleFiles,toggleQueueing,toggleSideTabs");
+      const shown = page.locator('aside.acpmux-chat-inspector[data-presence="shown"]');
+      await page.evaluate(() => window.cmuxAcpmuxBridge!.command!("showBackgroundTasks"));
+      await shown.locator('[data-section="tasks"]').waitFor({ timeout: 10_000 });
+      await page.evaluate(() => window.cmuxAcpmuxBridge!.command!("showSubagents"));
+      await shown.locator('[data-section="subagents"]').waitFor({ timeout: 10_000 });
     } finally {
       await page.close();
     }
