@@ -74,15 +74,27 @@ public nonisolated struct ContextMenuLayout: Sendable, Hashable, Codable {
         func keep(_ key: String) -> Bool { known.contains(key) && seen.insert(key).inserted }
         let hidden = hidden.filter(keep)
         var top = top.filter { $0 == Self.separator || keep($0) }
-        let more = more.filter(keep)
-        let generatedTop = entries.compactMap(Self.key(of:))
-        for (index, key) in generatedTop.enumerated() where !seen.contains(key) {
+        // More holds rows, never itself.
+        let more = more.filter { $0 != Self.moreKey && keep($0) }
+        let generatedTop = entries.map { Self.key(of: $0) ?? Self.separator }
+        for (index, key) in generatedTop.enumerated() where key != Self.separator && !seen.contains(key) {
             seen.insert(key)
-            let anchor = generatedTop[..<index].last { top.contains($0) }
-            let position = anchor.flatMap { top.firstIndex(of: $0) }.map { $0 + 1 } ?? 0
-            top.insert(key, at: position)
+            top.insert(key, at: Self.insertion(of: index, generated: generatedTop, in: top))
         }
         return ContextMenuLayout(top: top, more: more, hidden: hidden)
+    }
+
+    /// Where a generated top-level row (at `index` of `generated`, separators included) goes in
+    /// `top`: after the row it follows in its generated section, else before the row that follows
+    /// it there, else after the nearest earlier row, else first. A row added to a section stays in it.
+    static func insertion(of index: Int, generated: [String], in top: [String]) -> Int {
+        let before = generated[..<index], after = generated[(index + 1)...]
+        let sectionStart = before.lastIndex(of: separator).map { $0 + 1 } ?? before.startIndex
+        if let anchor = before[sectionStart...].last(where: top.contains), let at = top.firstIndex(of: anchor) { return at + 1 }
+        let sectionEnd = after.firstIndex(of: separator) ?? after.endIndex
+        if let next = after[..<sectionEnd].first(where: top.contains), let at = top.firstIndex(of: next) { return at }
+        if let anchor = before.last(where: { $0 != separator && top.contains($0) }), let at = top.firstIndex(of: anchor) { return at + 1 }
+        return 0
     }
 
     /// The menu `entries` arranged by this layout (``normalized(against:)`` first). More shows the

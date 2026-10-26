@@ -173,7 +173,8 @@ final class BrowserPageRequests: BrowserTabDelegate {
                                                      services: services) + host.items + PageShareMenu.items(for: page.state.url)
             host.removeAllItems()
             // The engine's menu holds the page rows: Customize Menu… ends it as it ends every whole menu.
-            let customize = services.registry.customizeMenuItem(for: .browserPage).map { [NSMenuItem.separator(), $0] } ?? []
+            // The engine's menu puts a separator before the extra rows; one more only after rows of ours.
+            let customize = services.registry.customizeMenuItem(for: .browserPage).map { extra.isEmpty ? [$0] : [NSMenuItem.separator(), $0] } ?? []
             services.contextMenus.present(request, in: page.contentView, leading: leading, extra: extra + customize)
         case .notice(let text):
             services.cache.existingBrowser(key)?.chrome.showNotice(text)

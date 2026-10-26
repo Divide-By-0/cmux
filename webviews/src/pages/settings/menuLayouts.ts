@@ -98,20 +98,40 @@ export function hide(layout: MenuLayout, key: string): MenuLayout {
 }
 
 /**
- * Shows a hidden row again where the app puts it: a top-level row after the row it follows in
- * the app's own menu (or first), any other row back in its folder.
+ * Where a generated top-level row (at `index` of `generated`) goes in `top`, as Swift
+ * `ContextMenuLayout.insertion` places a row the layout does not name: after the row it follows
+ * in its generated section, else before the row after it there, else after the nearest earlier
+ * row, else first.
+ */
+function lastWhere(list: string[], test: (key: string) => boolean): string | undefined {
+  for (let index = list.length - 1; index >= 0; index -= 1) if (test(list[index]!)) return list[index];
+  return undefined;
+}
+
+export function insertion(index: number, generated: string[], top: string[]): number {
+  const before = generated.slice(0, index);
+  const after = generated.slice(index + 1);
+  const sectionStart = before.lastIndexOf(SEPARATOR) + 1;
+  const anchor = lastWhere(before.slice(sectionStart), (key) => top.includes(key));
+  if (anchor !== undefined) return top.indexOf(anchor) + 1;
+  const sectionEnd = after.indexOf(SEPARATOR) < 0 ? after.length : after.indexOf(SEPARATOR);
+  const next = after.slice(0, sectionEnd).find((key) => top.includes(key));
+  if (next !== undefined) return top.indexOf(next);
+  const earlier = lastWhere(before, (key) => key !== SEPARATOR && top.includes(key));
+  return earlier === undefined ? 0 : top.indexOf(earlier) + 1;
+}
+
+/**
+ * Shows a hidden row again where the app puts it: a top-level row in its generated section
+ * (`insertion`), any other row back in its folder.
  */
 export function show(menu: ContextMenuState, layout: MenuLayout, key: string): MenuLayout {
   const next = { ...layout, hidden: without(layout.hidden, key) };
   const generated = menu.generated.top;
   const at = generated.indexOf(key);
   if (at < 0) return next;
-  const anchor = generated
-    .slice(0, at)
-    .reverse()
-    .find((item) => item !== SEPARATOR && next.top.includes(item));
   const top = [...next.top];
-  top.splice(anchor === undefined ? 0 : top.indexOf(anchor) + 1, 0, key);
+  top.splice(insertion(at, generated, top), 0, key);
   return { ...next, top };
 }
 

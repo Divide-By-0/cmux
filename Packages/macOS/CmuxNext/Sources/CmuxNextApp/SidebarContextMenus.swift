@@ -36,7 +36,7 @@ enum SidebarContextMenus {
             let all = selection ? ContextMenuCatalog.shared.selectionEntries(for: .workspaceRow) : registry.contextMenuEntries(for: .workspaceRow)
             let entries = highlighted ? all : ContextMenuCatalog.removing(["notifications.dismissHighlight"], from: all)
             let target = ActionTargetRef(kind: .workspace, id: first.rawValue)
-            let menu = registry.makeContextMenu(for: .workspaceRow, target: target, entries: entries, customize: !selection)
+            let menu = registry.makeContextMenu(for: .workspaceRow, target: target, entries: entries, customize: false)
             // The name field renames the clicked row only, so a multi-row selection gets just the swatches.
             // A pinned workspace's tile has no row in the list model; its name comes from the workspace.
             let title = model.workspace(first)?.title ?? services.workspace(id: first.rawValue)?.displayName ?? ""
@@ -46,6 +46,8 @@ enum SidebarContextMenus {
                 menu.addItem(.separator())
                 for item in trailing { menu.addItem(item) }
             }
+            // Customize Menu… ends the menu, after a pinned tile's own rows.
+            if !selection { registry.appendCustomizeItem(to: menu, for: .workspaceRow) }
             if selection { nameSelection(menu, ids, services) }
             menu.themeRows(in: scope)
             return menu

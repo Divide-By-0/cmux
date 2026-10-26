@@ -36,6 +36,16 @@ extension ActionRegistry {
         menu.addItem(item)
     }
 
+    /// The menu and index of the row that runs `id` in `menu` or any of its submenus: a row the
+    /// person moved into More (Settings > Menus) is found there too.
+    public static func locate(_ id: ActionID, in menu: NSMenu) -> (menu: NSMenu, index: Int)? {
+        if let index = menu.items.firstIndex(where: { menuRun(of: $0)?.id == id }) { return (menu, index) }
+        for case let submenu? in menu.items.map(\.submenu) {
+            if let found = locate(id, in: submenu) { return found }
+        }
+        return nil
+    }
+
     /// Whether `item` is a Customize Menu… row (tests, and menus that move rows between menus).
     public static func isCustomizeItem(_ item: NSMenuItem) -> Bool {
         item.representedObject is CustomizeMenuHandler

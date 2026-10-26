@@ -5,7 +5,7 @@
 // separators; Reset brings back the app's own menu. Customize Menu… at the end of a menu opens
 // this page on it (`?focus=<menu>`).
 import { useId, useState, type DragEvent, type ReactNode } from "react";
-import { useSettingsState, useStore } from "../context";
+import { useSettingsRouter, useSettingsState, useStore } from "../context";
 import { Switch } from "../editors/ToggleEditor";
 import { Icon } from "../icons";
 import {
@@ -22,6 +22,7 @@ import {
   type TopItem,
 } from "../menuLayouts";
 import type { ContextMenuState, MenuLayout, MenuRow } from "../ops";
+import { sectionHref } from "../router";
 import { t } from "../strings";
 import { ResetSpacer } from "./ResetButton";
 
@@ -59,19 +60,20 @@ function ActionButton({
 export function ContextMenusCard({ focus }: { focus: string | null }) {
   const store = useStore();
   const state = useSettingsState().host?.context_menus;
+  const router = useSettingsRouter();
   const toggleId = useId();
-  // The menu Customize Menu… opened (the route's focus) until the person picks another; a new
-  // Customize Menu… click selects its menu again.
-  const [chosen, setChosen] = useState<{ focus: string | null; menu: string | null }>({ focus, menu: focus });
-  if (chosen.focus !== focus) setChosen({ focus, menu: focus });
-  // The layout just saved, shown until the host lists bring it back.
+  // The layout just saved, shown until the host lists bring it back, and the last write's refusal.
   const [pending, setPending] = useState<{ menu: string; layout: MenuLayout } | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
   const [open, setOpen] = useState<Set<string>>(() => new Set([MORE]));
   const [drag, setDrag] = useState<Drag | null>(null);
   const [dropAt, setDropAt] = useState<string | null>(null);
   if (!state || state.menus.length === 0) return null;
 
-  const menu = state.menus.find((item) => item.id === chosen.menu) ?? state.menus[0]!;
+  // The chosen menu is the route's focus: Customize Menu… opens `?focus=<menu>`, and picking a menu
+  // here replaces it, so a later Customize Menu… always changes the route and selects its menu.
+  const menu = state.menus.find((item) => item.id === focus) ?? state.menus[0]!;
+  const hasMore = menu.rows.some((row) => row.key === MORE);
   const layout = pending?.menu === menu.id ? pending.layout : menu.layout;
   const shown = view(menu, layout);
   const generated = isGenerated(menu, layout);
@@ -79,8 +81,10 @@ export function ContextMenusCard({ focus }: { focus: string | null }) {
   const save = (next: MenuLayout) => {
     const write = { menu: menu.id, layout: next };
     setPending(write);
-    void store
+    setFailure(null);
+    store
       .setContextMenuLayout(menu.id, isGenerated(menu, next) ? null : next)
+      .catch((error: unknown) => setFailure(error instanceof Error ? error.message : String(error)))
       .finally(() => setPending((current) => (current === write ? null : current)));
   };
   const toggleOpen = (key: string) =>
@@ -213,7 +217,7 @@ export function ContextMenusCard({ focus }: { focus: string | null }) {
           <span className="menu-row-actions">
             {up}
             {down}
-            {isMore ? null : (
+            {isMore || !hasMore ? null : (
               <ActionButton icon="arrow.down.to.more" label={`${t("settingsWindow.menus.moveToMore")} ${row.title}`} onClick={() => save(demote(layout, row.key))} />
             )}
             <ActionButton icon="eye.slash" label={`${t("settingsWindow.menus.hide")} ${row.title}`} onClick={() => save(hide(layout, row.key))} />
@@ -239,7 +243,15 @@ export function ContextMenusCard({ focus }: { focus: string | null }) {
                 <div className="row-help">{t("settingsWindow.menus.customizeItem.help")}</div>
               </div>
               <div className="row-control">
-                <Switch checked={state.show_customize_item} disabled={false} labelId={toggleId} onToggle={(next) => void store.setShowCustomizeMenuItem(next)} />
+                <Switch
+                  checked={state.show_customize_item}
+                  disabled={false}
+                  labelId={toggleId}
+                  onToggle={(next) => {
+                    setFailure(null);
+                    store.setShowCustomizeMenuItem(next).catch((error: unknown) => setFailure(error instanceof Error ? error.message : String(error)));
+                  }}
+                />
                 <ResetSpacer />
               </div>
             </div>
@@ -261,7 +273,7 @@ export function ContextMenusCard({ focus }: { focus: string | null }) {
                     className="menus-list-item"
                     data-menu={item.id}
                     aria-current={item.id === menu.id ? "true" : undefined}
-                    onClick={() => setChosen({ focus, menu: item.id })}
+                    onClick={() => router.history.replace(sectionHref("menus", item.id))}
                   >
                     <span>{item.title}</span>
                     {item.customized ? <span className="menus-edited" title={t("settingsWindow.menus.edited")} /> : null}
@@ -283,6 +295,11 @@ export function ContextMenusCard({ focus }: { focus: string | null }) {
             </button>
           </header>
           <p className="row-help menus-help">{t("settingsWindow.menus.help")}</p>
+          {failure ? (
+            <p className="menus-failure" role="alert" data-failure="">
+              {failure}
+            </p>
+          ) : null}
           <ol className="menu-preview" data-menu-preview="">
             {shown.top.map((item, position) => topRow(item, position, shown.top.length))}
             <li className="menu-drop-end" {...dropTarget("end", (dragged) => insertAt(dragged, layout.top.length))} aria-hidden="true" />

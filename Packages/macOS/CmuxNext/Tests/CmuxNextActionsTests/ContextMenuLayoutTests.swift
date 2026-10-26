@@ -141,6 +141,38 @@ struct ContextMenuLayoutTests {
         #expect(!ContextMenuCatalog.shared.referencedIDs(entries).contains(ActionID(rawValue: promoted)))
     }
 
+    @Test func aNewRowStaysInItsGeneratedSection() {
+        // Generated [A, -, N, B]; saved before N existed as [A, -, B]: N joins B's section, not A's.
+        let generated: [ContextMenuEntry] = [.action("a"), .separator, .action("n"), .action("b")]
+        let saved = ContextMenuLayout(top: ["a", "-", "b"])
+        #expect(saved.normalized(against: generated).top == ["a", "-", "n", "b"])
+        // With its section's rows moved away, it follows the nearest earlier row.
+        #expect(ContextMenuLayout(top: ["a"], hidden: ["b"]).normalized(against: generated).top == ["a", "n"])
+    }
+
+    @Test func moreNeverHoldsItself() {
+        // A hand-edited cmux.json that names More inside More draws More once, with its rows once.
+        var layout = ContextMenuLayout.generated(generated)
+        layout.top.removeAll { $0 == ContextMenuLayout.moreKey }
+        layout.more = [ContextMenuLayout.moreKey]
+        let entries = layout.applied(to: generated)
+        let mores = entries.filter { if case .folder(.more, _) = $0 { true } else { false } }
+        #expect(mores.count == 1)
+        guard case .folder(.more, let rows)? = mores.first else { return }
+        #expect(!rows.contains { if case .folder(.more, _) = $0 { true } else { false } })
+    }
+
+    @Test func aRowMovedIntoMoreIsFoundThere() throws {
+        let registry = registry()
+        var layout = ContextMenuLayout.generated(generated)
+        layout.top.removeAll { $0 == "renameWorkspace" }
+        layout.more = ["renameWorkspace"]
+        registry.contextMenuLayouts[.workspaceRow] = layout
+        let menu = registry.makeContextMenu(for: .workspaceRow, target: workspace)
+        let found = try #require(ActionRegistry.locate("renameWorkspace", in: menu))
+        #expect(found.menu === more(menu))
+    }
+
     @Test func settingsListsEveryMenuOnce() {
         #expect(Set(ActionMenuContext.editorOrder) == Set(ActionMenuContext.allCases))
         #expect(ActionMenuContext.editorOrder.count == ActionMenuContext.allCases.count)

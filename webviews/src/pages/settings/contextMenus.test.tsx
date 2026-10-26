@@ -83,6 +83,8 @@ test("separators add and go, and Reset brings back the app's menu", async () => 
   await settle();
   const reset = () => editor(page.container).querySelector<HTMLButtonElement>('[data-action="reset"]')!;
   expect(reset().disabled).toBe(true);
+  // A menu without More offers no Move to More (the row would leave the editor).
+  expect(button(row(page.container, "copy"), "Move to More")).toBeUndefined();
   await click(editor(page.container).querySelector<HTMLElement>('[data-action="add-separator"]')!);
   expect(lastSaved(page.provider).layout?.top.at(-1)).toBe("-");
   expect(reset().disabled).toBe(false);

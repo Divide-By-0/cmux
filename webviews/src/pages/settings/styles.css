@@ -1907,3 +1907,9 @@ button.menu-disclosure {
     flex-wrap: wrap;
   }
 }
+
+.menus-failure {
+  margin: 0 0 10px;
+  color: var(--danger);
+  font-size: 12px;
+}

@@ -49,9 +49,10 @@ public struct ContextMenusSettingsPage {
         guard let name = params["menu"]?.stringValue, let menu = ActionMenuContext(rawValue: name) else {
             throw InvalidRequest(message: "menu must name a right-click menu")
         }
+        guard let value = params["layout"] else { throw InvalidRequest(message: "layout is required (null resets the menu)") }
         let generated = ContextMenuCatalog.shared.entries(for: menu)
         var layout: ContextMenuLayout?
-        if let value = params["layout"], value != .null {
+        if value != .null {
             guard let parsed = ContextMenusSetting.layout(value) else {
                 throw InvalidRequest(message: "layout must be {top, more, hidden} lists of row keys")
             }

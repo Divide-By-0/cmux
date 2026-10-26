@@ -25,10 +25,14 @@ final class SettingsWindowService: InternalPageProvider {
         self.services = services
     }
 
-    /// Settings > Menus with `context`'s menu selected.
+    /// Settings > Menus with `context`'s menu selected. Each open is a new route (`open`, which the
+    /// page ignores), so Customize Menu… selects its menu again after the person picked another.
     static func menusRoute(_ context: ActionMenuContext) -> String {
-        "#/settings/menus?focus=\(context.rawValue)"
+        menusOpens += 1
+        return "#/settings/menus?focus=\(context.rawValue)&open=\(menusOpens)"
     }
+
+    private static var menusOpens = 0
 
     /// The window whose tab shows Settings, if any.
     var window: NSWindow? {
