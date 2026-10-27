@@ -1153,6 +1153,10 @@ jobs:
         if: ${{ matrix.group == 'release-ios' }}
         run: python3 ios/tests/test_cloud_vpn_distribution.py
 
+      - name: Validate App Store privacy manifest and public metadata
+        if: ${{ matrix.group == 'release-ios' }}
+        run: python3 ios/tests/test_appstore_review_package.py
+
       - name: Validate the cmux.app upload marker follows the receipt
         if: ${{ matrix.group == 'release-ios' }}
         run: python3 tests/test_ios_appstore_upload_marker.py
@@ -1288,6 +1292,10 @@ jobs:
       - name: Validate the cmux NEXT DEV tip feed
         if: ${{ matrix.group == 'release-notary' }}
         run: python3 tests/test_cmux_next_dev_tip_feed.py
+
+      - name: Validate nightly and DEV delivery never cancel or replace a waiting run
+        if: ${{ matrix.group == 'release-notary' }}
+        run: python3 tests/test_nightly_delivery_concurrency.py
 
       - name: Validate the Linux DEV signer (stock rcodesign, fake-rcodesign fixture)
         if: ${{ matrix.group == 'release-notary' }}
