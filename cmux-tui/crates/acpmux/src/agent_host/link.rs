@@ -206,8 +206,24 @@ pub async fn connect(record: HostRecord, resume_after: u64) -> Result<Connect> {
         .map_err(|_| anyhow!("agent host did not answer hello within {HELLO_BUDGET:?}"))?
 }
 
+/// [`connect`], speaking at most protocol `max`, as a daemon of an older build does. For tests.
+#[doc(hidden)]
+pub async fn connect_with_max(record: HostRecord, resume_after: u64, max: u16) -> Result<Connect> {
+    connect_inner_max(record, resume_after, max).await
+}
+
 #[cfg(unix)]
 async fn connect_inner(record: HostRecord, resume_after: u64) -> Result<Connect> {
+    connect_inner_max(record, resume_after, PROTOCOL_MAX).await
+}
+
+#[cfg(not(unix))]
+async fn connect_inner_max(record: HostRecord, resume_after: u64, _max: u16) -> Result<Connect> {
+    connect_inner(record, resume_after).await
+}
+
+#[cfg(unix)]
+async fn connect_inner_max(record: HostRecord, resume_after: u64, max: u16) -> Result<Connect> {
     let stream = UnixStream::connect(&record.socket)
         .await
         .with_context(|| format!("connect {}", record.socket.display()))?;
@@ -216,7 +232,7 @@ async fn connect_inner(record: HostRecord, resume_after: u64) -> Result<Connect>
         &mut wr,
         &ControllerFrame::Hello {
             min: PROTOCOL_MIN,
-            max: PROTOCOL_MAX,
+            max,
             token: record.owner_token.clone(),
             controller_build: crate::hub::BUILD.to_owned(),
         },
