@@ -17,6 +17,19 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct SurfaceSocketCommandTests {
+    @Test func displayCreationBusyRemainsARetryableFailureAcrossTheWorkerBridge() async throws {
+        let response = await Task.detached {
+            TerminalController.shared.v2VmCall(id: "display-busy", timeoutSeconds: 5) {
+                throw TerminalController.SurfaceDisplayCreationBusy()
+            }
+        }.value
+        let object = try #require(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
+        let error = try Self.error(object)
+        #expect(object["id"] as? String == "display-busy")
+        #expect(error["code"] as? String == "busy")
+        #expect(object["result"] == nil)
+    }
+
     @Test(arguments: [
         CloudEnvDelivery.DeliveryError.outdatedShim("test-machine"),
         .receiverNotReady("starting"),
