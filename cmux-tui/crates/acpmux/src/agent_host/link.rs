@@ -152,10 +152,11 @@ pub struct QueryReply {
 
 type Queries = Arc<std::sync::Mutex<std::collections::HashMap<u64, oneshot::Sender<QueryReply>>>>;
 
-/// The fences of the lines sent with a receipt (`ControllerFrame::Line`), with their host's
-/// incarnation, until the host says its harness has them. Shared by every connection this
-/// daemon makes, so a receipt a later connection to the same host gets settles its line
-/// (review 82 of #23322); the host's end settles the rest (`settle_receipts_of`).
+/// The fences of the lines sent to a host (`ControllerFrame::Line`), with its incarnation,
+/// until its receipt (`WRITTEN_METHOD`, `settle_receipt`) or its end (`settle_receipts_of`)
+/// settles them. Shared by every connection this daemon makes, so a receipt a later connection
+/// to the same host gets settles its line (review 82 of #23322). A protocol-1 host gives no
+/// receipt: its lines wait here for its end, or for their request's answer (review 83).
 type Receipts = std::sync::Mutex<std::collections::HashMap<u64, (String, crate::agent::Fence)>>;
 
 static RECEIPTS: std::sync::LazyLock<Receipts> = std::sync::LazyLock::new(Default::default);
@@ -168,6 +169,27 @@ static NEXT_RECEIPT: std::sync::LazyLock<std::sync::atomic::AtomicU64> =
         let _ = getrandom::fill(&mut high);
         std::sync::atomic::AtomicU64::new(u64::from(u32::from_le_bytes(high)) << 32)
     });
+
+/// A host's receipt (`WRITTEN_METHOD`) for the line it names: written, or never (`written`
+/// false: its harness's stdin closed). An unknown one (a previous daemon's) is ignored.
+pub fn settle_receipt(receipt: u64, written: bool) {
+    let fence = RECEIPTS.lock_or_recover().remove(&receipt).map(|(_, f)| f);
+    match fence {
+        Some(f) if written => f.written(),
+        Some(f) => f.failed(),
+        None => {}
+    }
+}
+
+/// Keeps `fence` until a receipt or its host's end settles it: its receipt.
+fn await_receipt(incarnation: &str, fence: &crate::agent::Fence) -> u64 {
+    let receipt = NEXT_RECEIPT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let mut receipts = RECEIPTS.lock_or_recover();
+    // Settled ones another way (an answered request) go.
+    receipts.retain(|_, (_, f)| !f.is_settled());
+    receipts.insert(receipt, (incarnation.to_owned(), fence.clone()));
+    receipt
+}
 
 /// The host incarnation `incarnation` ended: what it had is never written now.
 pub fn settle_receipts_of(incarnation: &str) {
@@ -272,8 +294,9 @@ async fn connect_inner_max(record: HostRecord, resume_after: u64, max: u16) -> R
     let (detach_tx, detach_rx) = oneshot::channel();
     let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let queries: Queries = Arc::default();
-    // A host from protocol 2 says when the harness has a fenced line (`HostFrame::Written`); an
-    // older one, only that its socket took the frame.
+    // A host from protocol 2 says when the harness has a fenced line (`WRITTEN_METHOD`); an
+    // older one says nothing, and its line stays unsettled until its host ends or its request
+    // is answered (review 83 of #23322).
     let receipted = adopted.version >= RECEIPT_VERSION;
     let incarnation = record.incarnation.clone();
     tokio::spawn(async move {
@@ -282,13 +305,12 @@ async fn connect_inner_max(record: HostRecord, resume_after: u64, max: u16) -> R
                 continue;
             }
             let mut receipt = None;
-            if let (Some(f), ControllerFrame::Line { receipt: asked, .. }) = (&fence, &mut frame)
-                && receipted
-            {
-                let r = NEXT_RECEIPT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                *asked = Some(r);
+            if let (Some(f), ControllerFrame::Line { receipt: asked, .. }) = (&fence, &mut frame) {
+                let r = await_receipt(&incarnation, f);
+                if receipted {
+                    *asked = Some(r);
+                }
                 receipt = Some(r);
-                RECEIPTS.lock_or_recover().insert(r, (incarnation.clone(), f.clone()));
             }
             if write_frame(&mut wr, &frame).await.is_err() {
                 if let Some(r) = receipt {
@@ -324,6 +346,14 @@ async fn connect_inner_max(record: HostRecord, resume_after: u64, max: u16) -> R
             loop {
                 match read_frame::<_, HostFrame>(&mut rd).await {
                     Ok(Some(HostFrame::Entry { h, e })) => {
+                        // A line's receipt settles it as it arrives: a fact of the host, true
+                        // whoever logs it (it is replayed to the next connection until logged).
+                        if let Entry::Tap { dir: TapDir::Out, msg } = &e
+                            && msg["method"] == WRITTEN_METHOD
+                            && let Some(r) = msg["params"]["receipt"].as_u64()
+                        {
+                            settle_receipt(r, msg["params"]["written"] == true);
+                        }
                         if entries_tx.send((h, e)).await.is_err() {
                             break;
                         }
@@ -335,11 +365,6 @@ async fn connect_inner_max(record: HostRecord, resume_after: u64, max: u16) -> R
                         break;
                     }
                     Ok(Some(HostFrame::TerminateAck)) => {}
-                    Ok(Some(HostFrame::Written { receipt })) => {
-                        if let Some((_, f)) = RECEIPTS.lock_or_recover().remove(&receipt) {
-                            f.written();
-                        }
-                    }
                     Ok(Some(HostFrame::QueryReply {
                         id,
                         claude_session_id,

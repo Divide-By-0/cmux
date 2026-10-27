@@ -162,7 +162,7 @@ pub const FENCE_CUT: &str =
     "an MDM push turned full access off before this message reached the agent, so it was not sent";
 
 /// One message's way to its agent: queued, being written, written (its agent's own stdin has
-/// it: for a hosted agent, once its host wrote it to the harness, `HostFrame::Written`), cut
+/// it: for a hosted agent, once its host wrote it to the harness, `WRITTEN_METHOD`), cut
 /// while queued (never written after), or failed (its transport closed). A family message or
 /// answer is held to it (`hub/full_access_bound.rs` `hold_until_written`).
 #[derive(Clone)]
@@ -249,6 +249,16 @@ impl Fence {
         }
     }
 
+    /// Whether it is settled: written, cut or failed.
+    pub fn is_settled(&self) -> bool {
+        self.now() >= Self::WRITTEN
+    }
+
+    /// Whether it was cut while queued: never written.
+    pub fn is_cut(&self) -> bool {
+        self.now() == Self::CUT
+    }
+
     /// Resolves once it is cut.
     async fn was_cut(&self) {
         let _ = self.0.step.subscribe().wait_for(|s| *s == Self::CUT).await;
@@ -258,7 +268,8 @@ impl Fence {
     /// `budget` per step and never through a chat's agent slot (review 81 of #23322): a direct
     /// child by its own slot, signalled only while it is unreaped under that slot's lock; a
     /// hosted one by its host's start nonce and live lock (`terminate_unadoptable`). True once
-    /// the message can not reach the agent after this; false when that is not proven in time.
+    /// the message can not reach the agent after this; false when that is not proven in time,
+    /// and the caller, which must not let go before it is proven, tries again.
     pub async fn cut_or_end(&self, budget: std::time::Duration) -> bool {
         if self.cut() {
             return true;
@@ -1087,7 +1098,15 @@ impl ChildAgent {
             self.write_fenced(&msg, fence).await.map_err(|e| RpcError::internal(e.to_string()))?;
             unhanded.0 = None;
             on_written();
-            rx.await.unwrap_or_else(|_| Err(RpcError::internal("agent response channel dropped")))
+            let answer = rx.await;
+            // Its agent answered it, so it read it: written (a host of protocol 1 gives no
+            // receipt, review 83 of #23322).
+            if answer.is_ok()
+                && let Some(f) = fence
+            {
+                f.written();
+            }
+            answer.unwrap_or_else(|_| Err(RpcError::internal("agent response channel dropped")))
         };
         let cut = async {
             match fence {
