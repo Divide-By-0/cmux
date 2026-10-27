@@ -113,12 +113,33 @@ def main() -> int:
             _must(bool(hits), "Global Search must find the renamed Miro terminal")
             _must(all(hit.get("title") == title for hit in hits), f"Global Search used a raw panel title: {hits}")
 
+            marker_suffix = str(time.time_ns())
+            content_marker = "cmuxsearch" + marker_suffix
+            # Assemble the marker in the shell so seeing it proves the command
+            # ran, rather than merely finding the echoed command line.
+            client.send_surface(surface_id, f"printf '%s%s\\n' cmuxsearch {marker_suffix}\n")
+            deadline = time.monotonic() + 10
+            while True:
+                screen = client._call("surface.read_text", {"surface_id": surface_id}) or {}
+                if content_marker in str(screen.get("text") or ""):
+                    break
+                _must(time.monotonic() < deadline, "test terminal did not produce its content marker")
+                time.sleep(0.05)
+            content = client._call("debug.global_search.query", {"query": content_marker}) or {}
+            _must(any(hit.get("panel_id") == surface_id and hit.get("title") == title
+                      for hit in content.get("hits") or []),
+                  "Global Search must index terminal contents under the displayed title")
+
             updated_title = title.replace("Miro", "Figma")
             client._call("surface.action", {"surface_id": surface_id, "action": "rename", "title": updated_title})
             result = client._call("debug.global_search.query", {"query": "Figma"}) or {}
             hits = [hit for hit in result.get("hits") or [] if hit.get("panel_id") == surface_id]
             _must(bool(hits) and all(hit.get("title") == updated_title for hit in hits),
                   "Global Search must refresh the displayed title after another rename")
+            content = client._call("debug.global_search.query", {"query": content_marker}) or {}
+            _must(any(hit.get("panel_id") == surface_id and hit.get("title") == updated_title
+                      for hit in content.get("hits") or []),
+                  "unchanged terminal contents must receive the new title after rename")
             previous = client._call("debug.global_search.query", {"query": "Miro"}) or {}
             _must(not any(hit.get("panel_id") == surface_id for hit in previous.get("hits") or []),
                   "Global Search must remove the old title rather than keep stale matches")
