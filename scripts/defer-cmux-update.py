@@ -191,6 +191,14 @@ def main():
         result = apply_once(args.manifest)
     else:
         result = watch(args.manifest)
+    if result["state"] == "installed" and not result.get("already_completed"):
+        # Refresh the canonical app registration for Dock/Spotlight. This does
+        # not launch or activate cmux; the user chooses when to open it.
+        record = json.loads(Path(args.manifest).read_text())
+        registration = subprocess.run([
+            "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
+            "-f", record["target"]], capture_output=True, text=True)
+        result["registration_exit"] = registration.returncode
     print(json.dumps(result), flush=True)
 
 
