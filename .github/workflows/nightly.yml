@@ -7977,13 +7977,14 @@ jobs:
           ref: ${{ needs.resolve-nightly-cmux-tui-client.outputs.build_sha }}
 
       # The wrapper comes from the workflow commit: the build checkout may predate it.
+      # The publication-tooling shape test_nightly_cmux_tui_resolve.py exempts: scripts only.
       - name: Checkout the gh token wrapper at the workflow commit
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
-          path: .gh-tooling
+          ref: ${{ github.sha }}
+          path: .publish-tooling
           sparse-checkout: scripts/ci/gh_app_token.sh
           sparse-checkout-cone-mode: false
 
@@ -8005,7 +8006,7 @@ jobs:
         env:
           GH_APP_TOKEN: ${{ steps.gh-app-token.outputs.token }}
           GH_FALLBACK_TOKEN: ${{ github.token }}
-        run: if [ -f .gh-tooling/scripts/ci/gh_app_token.sh ]; then bash .gh-tooling/scripts/ci/gh_app_token.sh --install; fi
+        run: if [ -f .publish-tooling/scripts/ci/gh_app_token.sh ]; then bash .publish-tooling/scripts/ci/gh_app_token.sh --install; fi
 
       - name: Wait through GitHub API rate limits in this job's gh calls
         # scripts/ci/gh_budget_wait.sh puts a gh first on PATH that waits for the shared budget's
@@ -8448,13 +8449,14 @@ jobs:
           ref: ${{ needs.resolve-nightly-cmux-tui-client.outputs.build_sha }}
           persist-credentials: false
       # The wrapper comes from the workflow commit: the build checkout may predate it.
+      # The publication-tooling shape test_nightly_cmux_tui_resolve.py exempts: scripts only.
       - name: Checkout the gh token wrapper at the workflow commit
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
-          path: .gh-tooling
+          ref: ${{ github.sha }}
+          path: .publish-tooling
           sparse-checkout: scripts/ci/gh_app_token.sh
           sparse-checkout-cone-mode: false
 
@@ -8476,7 +8478,7 @@ jobs:
         env:
           GH_APP_TOKEN: ${{ steps.gh-app-token.outputs.token }}
           GH_FALLBACK_TOKEN: ${{ github.token }}
-        run: if [ -f .gh-tooling/scripts/ci/gh_app_token.sh ]; then bash .gh-tooling/scripts/ci/gh_app_token.sh --install; fi
+        run: if [ -f .publish-tooling/scripts/ci/gh_app_token.sh ]; then bash .publish-tooling/scripts/ci/gh_app_token.sh --install; fi
 
       - name: Wait through GitHub API rate limits in this job's gh calls
         # scripts/ci/gh_budget_wait.sh puts a gh first on PATH that waits for the shared budget's

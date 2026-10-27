@@ -25,7 +25,7 @@ APP_JOBS = {
     "republish-nightly-deltas": "write", "publish-release-notes": "read",
     "publish-nightly-next-github": "write", "publish-nightly-next-github-names": "write",
 }
-APP_INSTALL = re.compile(r"bash (\.publish-tooling/|\.gh-tooling/)?scripts/ci/gh_app_token\.sh --install")
+APP_INSTALL = re.compile(r"bash (\.publish-tooling/)?scripts/ci/gh_app_token\.sh --install")
 BUDGET_INSTALL = re.compile(r"bash (\.publish-tooling/)?scripts/ci/gh_budget_wait\.sh --install")
 
 
@@ -80,13 +80,13 @@ class WorkflowTests(unittest.TestCase):
         for name in APP_JOBS:
             steps = self.jobs[name]["steps"]
             run = next(s["run"] for s in steps if APP_INSTALL.search(str(s.get("run", ""))))
-            if ".gh-tooling/" in run:
-                checkout = next(s for s in steps if s.get("name") == "Checkout the gh token wrapper at the workflow commit")
-                self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}", name)
-                self.assertFalse(checkout["with"]["persist-credentials"], name)
-            elif ".publish-tooling/" in run:
-                tooling = next(s for s in steps if (s.get("with") or {}).get("path") == ".publish-tooling")
-                self.assertEqual(tooling["with"]["ref"], "${{ github.sha }}", name)
+            if ".publish-tooling/" in run:
+                # One scripts-only checkout at the workflow commit (test_nightly_cmux_tui_resolve.py
+                # exempts exactly that shape from the build-commit pin).
+                tooling = [s for s in steps if (s.get("with") or {}).get("path") == ".publish-tooling"]
+                self.assertEqual(len(tooling), 1, name)
+                self.assertEqual(tooling[0]["with"]["ref"], "${{ github.sha }}", name)
+                self.assertFalse(tooling[0]["with"]["persist-credentials"], name)
             else:  # the job's own checkout is the workflow commit
                 checkout = next(s for s in steps if "actions/checkout" in str(s.get("uses", "")))
                 self.assertIn(checkout.get("with", {}).get("ref", "${{ github.sha }}"), ("${{ github.sha }}",), name)
