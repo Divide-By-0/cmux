@@ -315,6 +315,8 @@ enum ActiveLookScope {
     }
 
     static var stats: [String: Int] = [:]
+    static var outSeen: Set<String> = []
+    static var outLogged = 0
     static func dlog(_ line: String) {
         let url = URL(fileURLWithPath: "/tmp/cmux-glass-diag3.txt")
         let data = Data((line + "\n").utf8)
@@ -354,6 +356,13 @@ enum ActiveLookScope {
     private static func decide(_ window: NSWindow, answer: Bool) -> Bool {
         // Outside a glass update for this window, or a key window once calibrated: AppKit's answer.
         stats["\(type(of: window)) a=\(answer) in=\(windows.last == ObjectIdentifier(window)) m=\(materialSite != nil)", default: 0] += 1
+        if windows.last != ObjectIdentifier(window), !answer, String(describing: type(of: window)) == "ShellWindow", let ms = materialSite, outLogged < 12 {
+            let syms = Thread.callStackSymbols
+            if syms.contains(where: { $0.contains("+1584") && $0.contains("AppKit") }) || syms.count > 0 {
+                let key = syms.prefix(40).joined(separator: "\n")
+                if !outSeen.contains(key) { outSeen.insert(key); outLogged += 1; dlog("OUT scope=\(windows) ms=\(String(ms, radix: 16))\n" + key) }
+            }
+        }
         guard windows.last == ObjectIdentifier(window), materialSite == nil || !answer else { return answer }
         var frames = [UnsafeMutableRawPointer?](repeating: nil, count: depth)
         let count = Int(frames.withUnsafeMutableBufferPointer { backtrace($0.baseAddress, Int32(depth)) })
