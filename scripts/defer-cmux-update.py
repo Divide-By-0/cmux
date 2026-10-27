@@ -144,7 +144,8 @@ def apply_once(manifest, process_finder=active_cmux_pids, validator=verify_signa
 
 
 def wait_for_exit(pids):
-    with select.kqueue() as queue:
+    queue = select.kqueue()
+    try:
         changes = [select.kevent(pid, filter=select.KQ_FILTER_PROC,
                                 flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
                                 fflags=select.KQ_NOTE_EXIT) for pid in pids]
@@ -152,6 +153,9 @@ def wait_for_exit(pids):
             queue.control(changes, 1, None)
         except ProcessLookupError:
             pass  # It exited between the process snapshot and registration.
+
+    finally:
+        queue.close()
 
 
 def watch(manifest, process_finder=active_cmux_pids, validator=verify_signature):

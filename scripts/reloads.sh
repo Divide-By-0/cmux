@@ -177,7 +177,7 @@ fi
 # Local Release artifacts cannot carry vendor keychain access groups.
 # This matches reload.sh's ad-hoc Release signing mode; no keychain is opened.
 if [[ "${CMUX_RELEASE_LOCAL_SIGNING:-0}" == "1" ]]; then
-  XCODEBUILD_ARGS+=(CODE_SIGN_ENTITLEMENTS= CODE_SIGN_IDENTITY=-)
+  XCODEBUILD_ARGS+=(CODE_SIGN_ENTITLEMENTS= CODE_SIGN_IDENTITY=- "ARCHS=$(uname -m)" ONLY_ACTIVE_ARCH=YES)
 fi
 XCODEBUILD_ARGS+=(build)
 
