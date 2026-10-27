@@ -113,5 +113,12 @@ class WorkflowTests(unittest.TestCase):
                 self.assertIn(".publish-tooling/scripts/ci/publish-release-assets.py", run, (name, step.get("name")))
                 self.assertNotIn("python3 scripts/ci/publish-release-assets.py", run, (name, step.get("name")))
 
+    def test_nightly_yml_stays_under_githubs_workflow_size_limit(self) -> None:
+        # GitHub refuses a workflow file over 512,000 bytes before any job starts: run 40424952395
+        # (518,322 bytes) failed with 0 jobs; a comment-padded copy of base at 512,100 bytes failed
+        # the same way, and one at 511,900 bytes produced no startup failure. The App-token steps are YAML aliases to stay under.
+        size = (ROOT / ".github/workflows/nightly.yml").stat().st_size
+        self.assertLess(size, 512_000, f"nightly.yml is {size} bytes; GitHub will not start it")
+
 if __name__ == "__main__":
     unittest.main()

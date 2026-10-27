@@ -5046,7 +5046,10 @@ jobs:
       # submodule, run 38669958906 skipped five accepted builds.
       # Release App first, github.token as the fallback (scripts/ci/gh_app_token.sh): the App is
       # its own actor, so a limit that every workflow's github.token shares does not refuse it.
-      - name: Mint the release App token for this job's gh calls
+      # Later jobs reuse these four steps by YAML alias (*gh-app-token-read, -write, *gh-app-install,
+      # -tooling): GitHub refuses a workflow file over 512,000 bytes before any job starts.
+      - &gh-app-token-read
+        name: Mint the release App token for this job's gh calls
         id: gh-app-token
         continue-on-error: true
         timeout-minutes: 2
@@ -5058,7 +5061,8 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: read
 
-      - name: Send this job's gh calls as the release App, github.token as the fallback
+      - &gh-app-install
+        name: Send this job's gh calls as the release App, github.token as the fallback
         env:
           GH_APP_TOKEN: ${{ steps.gh-app-token.outputs.token }}
           GH_FALLBACK_TOKEN: ${{ github.token }}
@@ -5456,7 +5460,8 @@ jobs:
 
       # Release App first, github.token as the fallback (scripts/ci/gh_app_token.sh): the App is
       # its own actor, so a limit that every workflow's github.token shares does not refuse it.
-      - name: Mint the release App token for this job's gh calls
+      - &gh-app-token-write
+        name: Mint the release App token for this job's gh calls
         id: gh-app-token
         continue-on-error: true
         timeout-minutes: 2
@@ -5468,7 +5473,8 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
 
-      - name: Send this job's gh calls as the release App, github.token as the fallback
+      - &gh-app-install-tooling
+        name: Send this job's gh calls as the release App, github.token as the fallback
         env:
           GH_APP_TOKEN: ${{ steps.gh-app-token.outputs.token }}
           GH_FALLBACK_TOKEN: ${{ github.token }}
@@ -6179,25 +6185,9 @@ jobs:
           path: .publish-tooling
           sparse-checkout: scripts
 
-      # Release App first, github.token as the fallback (scripts/ci/gh_app_token.sh): the App is
-      # its own actor, so a limit that every workflow's github.token shares does not refuse it.
-      - name: Mint the release App token for this job's gh calls
-        id: gh-app-token
-        continue-on-error: true
-        timeout-minutes: 2
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.CMUX_RELEASE_APP_ID }}
-          private-key: ${{ secrets.CMUX_RELEASE_APP_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
+      - *gh-app-token-write
 
-      - name: Send this job's gh calls as the release App, github.token as the fallback
-        env:
-          GH_APP_TOKEN: ${{ steps.gh-app-token.outputs.token }}
-          GH_FALLBACK_TOKEN: ${{ github.token }}
-        run: if [ -f .publish-tooling/scripts/ci/gh_app_token.sh ]; then bash .publish-tooling/scripts/ci/gh_app_token.sh --install; fi
+      - *gh-app-install-tooling
 
       - name: Wait through GitHub API rate limits in this job's gh calls
         run: bash .publish-tooling/scripts/ci/gh_budget_wait.sh --install
@@ -6374,25 +6364,9 @@ jobs:
           path: .publish-tooling
           sparse-checkout: scripts
 
-      # Release App first, github.token as the fallback (scripts/ci/gh_app_token.sh): the App is
-      # its own actor, so a limit that every workflow's github.token shares does not refuse it.
-      - name: Mint the release App token for this job's gh calls
-        id: gh-app-token
-        continue-on-error: true
-        timeout-minutes: 2
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.CMUX_RELEASE_APP_ID }}
-          private-key: ${{ secrets.CMUX_RELEASE_APP_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
+      - *gh-app-token-write
 
-      - name: Send this job's gh calls as the release App, github.token as the fallback
-        env:
-          GH_APP_TOKEN: ${{ steps.gh-app-token.outputs.token }}
-          GH_FALLBACK_TOKEN: ${{ github.token }}
-        run: if [ -f .publish-tooling/scripts/ci/gh_app_token.sh ]; then bash .publish-tooling/scripts/ci/gh_app_token.sh --install; fi
+      - *gh-app-install-tooling
 
       - name: Wait through GitHub API rate limits in this job's gh calls
         run: bash .publish-tooling/scripts/ci/gh_budget_wait.sh --install
@@ -6549,25 +6523,9 @@ jobs:
           path: .publish-tooling
           sparse-checkout: scripts
 
-      # Release App first, github.token as the fallback (scripts/ci/gh_app_token.sh): the App is
-      # its own actor, so a limit that every workflow's github.token shares does not refuse it.
-      - name: Mint the release App token for this job's gh calls
-        id: gh-app-token
-        continue-on-error: true
-        timeout-minutes: 2
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.CMUX_RELEASE_APP_ID }}
-          private-key: ${{ secrets.CMUX_RELEASE_APP_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: read
+      - *gh-app-token-read
 
-      - name: Send this job's gh calls as the release App, github.token as the fallback
-        env:
-          GH_APP_TOKEN: ${{ steps.gh-app-token.outputs.token }}
-          GH_FALLBACK_TOKEN: ${{ github.token }}
-        run: if [ -f .publish-tooling/scripts/ci/gh_app_token.sh ]; then bash .publish-tooling/scripts/ci/gh_app_token.sh --install; fi
+      - *gh-app-install-tooling
 
       - name: Wait through GitHub API rate limits in this job's gh calls
         # scripts/ci/gh_budget_wait.sh puts a gh first on PATH that waits for the shared budget's
@@ -6667,25 +6625,9 @@ jobs:
         with:
           persist-credentials: false
 
-      # Release App first, github.token as the fallback (scripts/ci/gh_app_token.sh): the App is
-      # its own actor, so a limit that every workflow's github.token shares does not refuse it.
-      - name: Mint the release App token for this job's gh calls
-        id: gh-app-token
-        continue-on-error: true
-        timeout-minutes: 2
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.CMUX_RELEASE_APP_ID }}
-          private-key: ${{ secrets.CMUX_RELEASE_APP_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: read
+      - *gh-app-token-read
 
-      - name: Send this job's gh calls as the release App, github.token as the fallback
-        env:
-          GH_APP_TOKEN: ${{ steps.gh-app-token.outputs.token }}
-          GH_FALLBACK_TOKEN: ${{ github.token }}
-        run: if [ -f scripts/ci/gh_app_token.sh ]; then bash scripts/ci/gh_app_token.sh --install; fi
+      - *gh-app-install
 
       - name: Wait through GitHub API rate limits in this job's gh calls
         # scripts/ci/gh_budget_wait.sh puts a gh first on PATH that waits for the shared budget's
@@ -6991,25 +6933,9 @@ jobs:
           persist-credentials: false
 
       # Checked again here: another run may have moved the old feed meanwhile.
-      # Release App first, github.token as the fallback (scripts/ci/gh_app_token.sh): the App is
-      # its own actor, so a limit that every workflow's github.token shares does not refuse it.
-      - name: Mint the release App token for this job's gh calls
-        id: gh-app-token
-        continue-on-error: true
-        timeout-minutes: 2
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.CMUX_RELEASE_APP_ID }}
-          private-key: ${{ secrets.CMUX_RELEASE_APP_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: read
+      - *gh-app-token-read
 
-      - name: Send this job's gh calls as the release App, github.token as the fallback
-        env:
-          GH_APP_TOKEN: ${{ steps.gh-app-token.outputs.token }}
-          GH_FALLBACK_TOKEN: ${{ github.token }}
-        run: if [ -f scripts/ci/gh_app_token.sh ]; then bash scripts/ci/gh_app_token.sh --install; fi
+      - *gh-app-install
 
       - name: Wait through GitHub API rate limits in this job's gh calls
         # scripts/ci/gh_budget_wait.sh puts a gh first on PATH that waits for the shared budget's
@@ -7584,25 +7510,9 @@ jobs:
       # build was signed and verified. A continued submission skipped here is
       # not retired: its artifacts expire (3 days), and the target and signing
       # jobs skip a build the old feed already has.
-      # Release App first, github.token as the fallback (scripts/ci/gh_app_token.sh): the App is
-      # its own actor, so a limit that every workflow's github.token shares does not refuse it.
-      - name: Mint the release App token for this job's gh calls
-        id: gh-app-token
-        continue-on-error: true
-        timeout-minutes: 2
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.CMUX_RELEASE_APP_ID }}
-          private-key: ${{ secrets.CMUX_RELEASE_APP_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
+      - *gh-app-token-write
 
-      - name: Send this job's gh calls as the release App, github.token as the fallback
-        env:
-          GH_APP_TOKEN: ${{ steps.gh-app-token.outputs.token }}
-          GH_FALLBACK_TOKEN: ${{ github.token }}
-        run: if [ -f scripts/ci/gh_app_token.sh ]; then bash scripts/ci/gh_app_token.sh --install; fi
+      - *gh-app-install
 
       - name: Wait through GitHub API rate limits in this job's gh calls
         # scripts/ci/gh_budget_wait.sh puts a gh first on PATH that waits for the shared budget's
@@ -7988,25 +7898,9 @@ jobs:
           sparse-checkout: scripts/ci/gh_app_token.sh
           sparse-checkout-cone-mode: false
 
-      # Release App first, github.token as the fallback (scripts/ci/gh_app_token.sh): the App is
-      # its own actor, so a limit that every workflow's github.token shares does not refuse it.
-      - name: Mint the release App token for this job's gh calls
-        id: gh-app-token
-        continue-on-error: true
-        timeout-minutes: 2
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.CMUX_RELEASE_APP_ID }}
-          private-key: ${{ secrets.CMUX_RELEASE_APP_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: read
+      - *gh-app-token-read
 
-      - name: Send this job's gh calls as the release App, github.token as the fallback
-        env:
-          GH_APP_TOKEN: ${{ steps.gh-app-token.outputs.token }}
-          GH_FALLBACK_TOKEN: ${{ github.token }}
-        run: if [ -f .publish-tooling/scripts/ci/gh_app_token.sh ]; then bash .publish-tooling/scripts/ci/gh_app_token.sh --install; fi
+      - *gh-app-install-tooling
 
       - name: Wait through GitHub API rate limits in this job's gh calls
         # scripts/ci/gh_budget_wait.sh puts a gh first on PATH that waits for the shared budget's
@@ -8089,25 +7983,9 @@ jobs:
             scripts/ci/gh_app_token.sh
           sparse-checkout-cone-mode: false
 
-      # Release App first, github.token as the fallback (scripts/ci/gh_app_token.sh): the App is
-      # its own actor, so a limit that every workflow's github.token shares does not refuse it.
-      - name: Mint the release App token for this job's gh calls
-        id: gh-app-token
-        continue-on-error: true
-        timeout-minutes: 2
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.CMUX_RELEASE_APP_ID }}
-          private-key: ${{ secrets.CMUX_RELEASE_APP_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
+      - *gh-app-token-write
 
-      - name: Send this job's gh calls as the release App, github.token as the fallback
-        env:
-          GH_APP_TOKEN: ${{ steps.gh-app-token.outputs.token }}
-          GH_FALLBACK_TOKEN: ${{ github.token }}
-        run: if [ -f .publish-tooling/scripts/ci/gh_app_token.sh ]; then bash .publish-tooling/scripts/ci/gh_app_token.sh --install; fi
+      - *gh-app-install-tooling
 
       - name: Wait through GitHub API rate limits in this job's gh calls
         # scripts/ci/gh_budget_wait.sh puts a gh first on PATH that waits for the shared budget's
@@ -8460,25 +8338,9 @@ jobs:
           sparse-checkout: scripts/ci/gh_app_token.sh
           sparse-checkout-cone-mode: false
 
-      # Release App first, github.token as the fallback (scripts/ci/gh_app_token.sh): the App is
-      # its own actor, so a limit that every workflow's github.token shares does not refuse it.
-      - name: Mint the release App token for this job's gh calls
-        id: gh-app-token
-        continue-on-error: true
-        timeout-minutes: 2
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.CMUX_RELEASE_APP_ID }}
-          private-key: ${{ secrets.CMUX_RELEASE_APP_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: read
+      - *gh-app-token-read
 
-      - name: Send this job's gh calls as the release App, github.token as the fallback
-        env:
-          GH_APP_TOKEN: ${{ steps.gh-app-token.outputs.token }}
-          GH_FALLBACK_TOKEN: ${{ github.token }}
-        run: if [ -f .publish-tooling/scripts/ci/gh_app_token.sh ]; then bash .publish-tooling/scripts/ci/gh_app_token.sh --install; fi
+      - *gh-app-install-tooling
 
       - name: Wait through GitHub API rate limits in this job's gh calls
         # scripts/ci/gh_budget_wait.sh puts a gh first on PATH that waits for the shared budget's
