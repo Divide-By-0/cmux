@@ -174,6 +174,11 @@ fi
 if [[ "${CMUX_SKIP_ZIG_BUILD:-}" == "1" ]]; then
   XCODEBUILD_ARGS+=(CMUX_SKIP_ZIG_BUILD=1)
 fi
+# Local Release artifacts cannot carry vendor keychain access groups.
+# This matches reload.sh's ad-hoc Release signing mode; no keychain is opened.
+if [[ "${CMUX_RELEASE_LOCAL_SIGNING:-0}" == "1" ]]; then
+  XCODEBUILD_ARGS+=(CODE_SIGN_ENTITLEMENTS= CODE_SIGN_IDENTITY=-)
+fi
 XCODEBUILD_ARGS+=(build)
 
 xcodebuild "${XCODEBUILD_ARGS[@]}"
