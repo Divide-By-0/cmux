@@ -165,8 +165,9 @@ impl Hub {
     /// Holds `hold` until the message about to go to `session`'s agent under the returned fence
     /// is written. An off push that waited `FAMILY_WRITE_BUDGET` cuts it: a message still queued
     /// is then never written, and the agent whose writer has it already ends first, by an
-    /// identity the cut proves (`Fence::cut_or_end`, reviews 81 and 82 of #23322), so a push
-    /// returns in bounded time and nothing it waited for reaches the agent after it.
+    /// identity the cut proves (`Fence::cut_or_end`, reviews 81 and 82 of #23322), so nothing
+    /// the push waited for reaches the agent after it. A cut that can not prove that in time
+    /// tries again, holding the gate (review 84).
     pub(super) fn hold_until_written(
         self: &Arc<Self>,
         session: &Arc<Session>,
@@ -175,15 +176,16 @@ impl Hub {
         let fence = crate::agent::Fence::default();
         let FamilyHold { gate, mut cut } = hold;
         let (held, id) = (fence.clone(), session.id.clone());
-        // task-owner: ends once the message settles (every carrier settles it) or is cut; the
-        // end of its writer below is bounded.
+        // task-owner: ends once the message settles (every carrier settles it) or is cut; each
+        // try to end its writer below is bounded.
         tokio::spawn(async move {
             tokio::select! {
                 biased;
                 () = held.settled() => {}
                 _ = cut.changed() => {
-                    if !held.cut_or_end(FAMILY_WRITE_BUDGET).await {
-                        tracing::warn!(session = %id, "an MDM off push cut a family message whose agent did not end in time");
+                    while !held.cut_or_end(FAMILY_WRITE_BUDGET).await {
+                        tracing::warn!(session = %id, "an MDM off push cut a family message whose agent did not end in time; trying again");
+                        tokio::time::sleep(FAMILY_WRITE_BUDGET).await;
                     }
                 }
             }

@@ -202,6 +202,9 @@ impl Hub {
         let hold = self.family_hold().await;
         self.receiver_check(caller, target).await?;
         let fence = self.hold_until_written(target, hold);
+        // Cut unless it wins, when the asking task has it: a losing, refused or dropped answer
+        // settles its fence, so no push waits on it (review 84 of #23322).
+        let mut unsent = crate::agent::CutOnDrop(Some(&fence));
         let control = if Self::web_turn(caller) || Self::web_turn(target) {
             Control::Web
         } else {
@@ -216,8 +219,6 @@ impl Hub {
         // Tests only: a pause right before the answer is given (`full_access_bound::WriteSeam`).
         #[cfg(test)]
         self.pause_at_family_write().await;
-        // A losing or refused answer never reaches the asking task: its fence is dropped here,
-        // which settles it.
         self.respond_permission(
             target,
             permission_id,
@@ -228,6 +229,7 @@ impl Hub {
             control,
         )
         .await?;
+        unsent.0 = None;
         Ok(json!({"answered": true, "sessionId": target.id, "permissionId": permission_id}))
     }
 }

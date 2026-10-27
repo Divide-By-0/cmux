@@ -338,8 +338,9 @@ async fn end_hosted(record: crate::agent_host::HostRecord) -> bool {
     .unwrap_or(false)
 }
 
-/// Cuts its fence when dropped (`ChildAgent::request_with_hook`), unless it was let go.
-struct CutOnDrop<'a>(Option<&'a Fence>);
+/// Cuts its fence when dropped (`ChildAgent::request_with_hook`, `hub/subsession_answer.rs`),
+/// unless it was let go.
+pub(crate) struct CutOnDrop<'a>(pub(crate) Option<&'a Fence>);
 
 impl Drop for CutOnDrop<'_> {
     fn drop(&mut self) {
