@@ -39,6 +39,40 @@ private func makeContext(
 
 @MainActor
 @Suite struct GlobalSearchTerminalDocumentTests {
+    @Test func bulkAndDirectContextsUseTheDisplayedCustomTerminalTitle() throws {
+        let app = AppDelegate()
+        let manager = TabManager()
+        let windowID = app.registerMainWindowContextForTesting(tabManager: manager)
+        defer { app.unregisterMainWindowContextForTesting(windowId: windowID) }
+        let workspace = try #require(manager.selectedWorkspace)
+        let panel = try #require(workspace.focusedTerminalPanel)
+        workspace.setPanelCustomTitle(panelId: panel.id, title: "Check Miro data transfer")
+
+        let bulk = try #require(app.globalSearchPanelContexts().first { $0.panelID == panel.id })
+        let direct = try #require(app.globalSearchContext(forPanelID: panel.id, preferredWorkspaceID: workspace.id))
+
+        #expect(bulk.panelTitle == "Check Miro data transfer")
+        #expect(direct.panelTitle == bulk.panelTitle)
+        #expect(GlobalSearchDocuments.titleDocument(for: bulk).text.contains("Miro"))
+        #expect(GlobalSearchDocuments.browseHit(for: bulk).title == "Check Miro data transfer")
+    }
+
+    @Test func contextsUseTheCachedProcessTitleWithoutACustomRename() throws {
+        let app = AppDelegate()
+        let manager = TabManager()
+        let windowID = app.registerMainWindowContextForTesting(tabManager: manager)
+        defer { app.unregisterMainWindowContextForTesting(windowId: windowID) }
+        let workspace = try #require(manager.selectedWorkspace)
+        let panel = try #require(workspace.focusedTerminalPanel)
+        workspace.panelTitles[panel.id] = "npm build"
+
+        let bulk = try #require(app.globalSearchPanelContexts().first { $0.panelID == panel.id })
+        let direct = try #require(app.globalSearchContext(forPanelID: panel.id, preferredWorkspaceID: workspace.id))
+
+        #expect(bulk.panelTitle == "npm build")
+        #expect(direct.panelTitle == bulk.panelTitle)
+    }
+
     @Test func buildsDocumentWithStableIDAndTerminalKind() throws {
         let panelID = UUID()
         let context = makeContext(panelID: panelID)
