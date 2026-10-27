@@ -1267,6 +1267,12 @@ impl ChildAgent {
     }
 
     /// The hosted harness exited (its host is finishing).
+    /// Tests only: its child's slot, which its reaper locks (`Fence::cut_or_end`).
+    #[cfg(test)]
+    pub(crate) fn child_slot(&self) -> Arc<Mutex<Option<Child>>> {
+        self.child.clone()
+    }
+
     pub fn has_exited(&self) -> bool {
         self.hosted.as_ref().is_some_and(|h| h.exited.load(Ordering::SeqCst))
     }

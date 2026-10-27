@@ -769,6 +769,9 @@ impl Hub {
                     }
                     // Decided but the answer never reached the agent: send it.
                     Some(outcome) => {
+                        if work.ancestor_answers.contains(&id.to_string()) {
+                            pause_replayed_answer().await;
+                        }
                         let _ = child.respond(id, Ok(permission_answer(outcome))).await;
                     }
                     None => self.reregister_permission(session, child, id, permission_id, request),
@@ -853,6 +856,18 @@ impl Hub {
             let answer = Ok(permission_answer(outcome));
             let _ = c.respond_fenced(agent_request_id, answer, fence.as_ref()).await;
         });
+    }
+}
+
+/// Debug builds only: a test pauses a restart's resend of an ancestor's answer 3 s right after
+/// its check, so it can push MDM's off then: the pause writes the file
+/// `ACPMUX_TEST_PAUSE_REPLAYED_ANSWER` names first (`durable_agents.rs`). Release builds have
+/// no seam.
+async fn pause_replayed_answer() {
+    #[cfg(debug_assertions)]
+    if let Some(marker) = std::env::var_os("ACPMUX_TEST_PAUSE_REPLAYED_ANSWER") {
+        let _ = std::fs::write(marker, "");
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     }
 }
 
