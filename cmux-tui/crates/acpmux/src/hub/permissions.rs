@@ -3,6 +3,15 @@
 use super::person::ANSWERED_BY_SLOT;
 use super::*;
 
+tokio::task_local! {
+    /// The fence of the ancestor's answer the agent's request in this task got, for its write.
+    static ANSWER_FENCE: std::cell::RefCell<Option<crate::agent::Fence>>;
+}
+
+fn answer_fence() -> Option<crate::agent::Fence> {
+    ANSWER_FENCE.try_with(|f| f.take()).ok().flatten()
+}
+
 // A losing answer is told the first one (`respond_permission`).
 #[path = "permission_settled.rs"]
 pub(super) mod settled;
@@ -233,7 +242,23 @@ impl Hub {
         }
     }
 
+    /// [`Self::on_agent_request_in`], where an ancestor's answer finds the fence of its write
+    /// (`ANSWER_FENCE`).
     pub(super) async fn on_agent_request(
+        self: Arc<Self>,
+        session: Arc<Session>,
+        id: Id,
+        m: String,
+        params: Option<Value>,
+        epoch: u64,
+        turn_id: Option<String>,
+        ask: Option<super::permission_groups::AskInFlight>,
+    ) {
+        let request = self.on_agent_request_in(session, id, m, params, epoch, turn_id, ask);
+        ANSWER_FENCE.scope(Default::default(), request).await;
+    }
+
+    async fn on_agent_request_in(
         self: Arc<Self>,
         session: Arc<Session>,
         id: Id,
@@ -254,7 +279,7 @@ impl Hub {
             let result = self
                 .handle_xai_request(&session, kind, params.unwrap_or(Value::Null), epoch, turn_id)
                 .await;
-            let _ = child.respond(id, result).await;
+            let _ = child.respond_fenced(id, result, answer_fence().as_ref()).await;
             return;
         }
         // Cursor's cursor/ requests: a question or a plan approval (cursor_ext.rs).
@@ -268,14 +293,14 @@ impl Hub {
                     turn_id,
                 )
                 .await;
-            let _ = child.respond(id, result).await;
+            let _ = child.respond_fenced(id, result, answer_fence().as_ref()).await;
             return;
         }
         if m == method::SESSION_REQUEST_PERMISSION {
             let params = params.unwrap_or(Value::Null);
             let result =
                 self.handle_permission_for(&session, params, epoch, turn_id, Some(&id), ask).await;
-            let _ = child.respond(id, Ok(result)).await;
+            let _ = child.respond_fenced(id, Ok(result), answer_fence().as_ref()).await;
             return;
         }
         // ACP file-system methods: the harness delegates reads and writes to
@@ -707,6 +732,10 @@ impl Hub {
             self.start_permission_group_timer(session, id);
         }
         let mut outcome = rx.await.unwrap_or_else(|_| json!({"outcome":"cancelled"}));
+        // An ancestor's answer: written under its fence (`subsession_answer.rs`).
+        if let Some(fence) = self.answer_fences.lock().unwrap().remove(&permission_id) {
+            let _ = ANSWER_FENCE.try_with(|f| f.replace(Some(fence)));
+        }
         // Who answered for the person (`hub/person.rs` answered_by): audit
         // only, never sent to the agent.
         let answered_by = outcome.as_object_mut().and_then(|o| o.remove(ANSWERED_BY_SLOT));
@@ -947,6 +976,12 @@ impl Hub {
                 }
             }
             let p = map.remove(permission_id).unwrap();
+            // An ancestor's answer that won: its fence goes to the asking task, which writes it
+            // (`ANSWER_FENCE`), here under the prompt's lock, where it won, so a losing answer
+            // never takes it away (review 81 of #23322).
+            if let Some(fence) = answerer.fence {
+                self.answer_fences.lock().unwrap().insert(permission_id.to_owned(), fence.clone());
+            }
             // A person's answer names them beside any device (`author.rs`), after the person
             // rule above, which it never satisfies.
             let answered_by = crate::author::answered_by(answered_by, answerer.author);
@@ -978,7 +1013,10 @@ impl Hub {
         if let Some(by) = answered_by {
             outcome[ANSWERED_BY_SLOT] = by;
         }
-        let _ = pending.reply.send(outcome);
+        // The asking task is gone: nothing writes the answer, and its fence goes too.
+        if pending.reply.send(outcome).is_err() && answerer.fence.is_some() {
+            self.answer_fences.lock().unwrap().remove(permission_id);
+        }
         Ok(())
     }
 
