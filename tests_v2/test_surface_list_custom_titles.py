@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression: surface.list and list-panels should return custom tab titles."""
+"""Regression: surface lists and Global Search must use displayed tab titles."""
 
 from __future__ import annotations
 
@@ -88,7 +88,7 @@ def main() -> int:
             surface_id = _wait_for_current_surface_id(client, workspace_id)
             _must(bool(surface_id), "surface.current returned no surface_id")
 
-            title = f"renamed-surface-{int(time.time() * 1000)}"
+            title = f"Check Miro data transfer {int(time.time() * 1000)}"
             renamed = client._call(
                 "surface.action",
                 {"surface_id": surface_id, "action": "rename", "title": title},
@@ -104,6 +104,24 @@ def main() -> int:
             cli_row = next((item for item in cli_listed.get("surfaces") or [] if str(item.get("title") or "") == title), None)
             _must(cli_row is not None, f"list-panels missing renamed surface: {cli_listed}")
             _must(str(cli_row.get("title") or "") == title, f"list-panels should return custom title {title!r}: {cli_row}")
+
+            # Reproduce Option-Command-F's real coordinator/index path. The tab
+            # list already resolved custom titles, but Global Search indexed the
+            # panel's raw "Terminal" title and could not find this same tab.
+            result = client._call("debug.global_search.query", {"query": "Miro"}) or {}
+            hits = [hit for hit in result.get("hits") or [] if hit.get("panel_id") == surface_id]
+            _must(bool(hits), "Global Search must find the renamed Miro terminal")
+            _must(all(hit.get("title") == title for hit in hits), f"Global Search used a raw panel title: {hits}")
+
+            updated_title = title.replace("Miro", "Figma")
+            client._call("surface.action", {"surface_id": surface_id, "action": "rename", "title": updated_title})
+            result = client._call("debug.global_search.query", {"query": "Figma"}) or {}
+            hits = [hit for hit in result.get("hits") or [] if hit.get("panel_id") == surface_id]
+            _must(bool(hits) and all(hit.get("title") == updated_title for hit in hits),
+                  "Global Search must refresh the displayed title after another rename")
+            previous = client._call("debug.global_search.query", {"query": "Miro"}) or {}
+            _must(not any(hit.get("panel_id") == surface_id for hit in previous.get("hits") or []),
+                  "Global Search must remove the old title rather than keep stale matches")
     finally:
         if workspace_id:
             with cmux(SOCKET_PATH) as cleanup_client:
@@ -112,7 +130,7 @@ def main() -> int:
                 except Exception:
                     pass
 
-    print("PASS: surface.list and list-panels return custom surface titles")
+    print("PASS: surface lists and Global Search use custom titles and refresh after rename")
     return 0
 
 
