@@ -44,6 +44,9 @@ pub(super) struct OpenWork {
     /// `permission_request` records by agent request id: (permissionId,
     /// request, logged decision when there is one).
     permissions: HashMap<String, (String, Value, Option<Value>)>,
+    /// Of those, the agent request ids whose logged decision an ancestor session gave
+    /// (`answeredBy.session`, `subsession_answer.rs`).
+    ancestor_answers: std::collections::HashSet<String>,
     /// Largest `hostSeq` logged under this incarnation. Every entry kind is
     /// logged in entry order before its ack, so this is the logged prefix.
     last_host_seq: u64,
@@ -399,6 +402,7 @@ impl Hub {
         let mut answered: std::collections::HashSet<String> = Default::default();
         let mut asked: HashMap<String, (String, Value, Option<Value>)> = HashMap::new();
         let mut by_permission: HashMap<String, String> = HashMap::new();
+        let mut ancestors = std::collections::HashSet::new();
         // permissionId -> the ids of its "allow always" options.
         let mut lasting: HashMap<String, Vec<String>> = HashMap::new();
         let always = |request: Option<&Value>| -> Vec<String> {
@@ -545,6 +549,11 @@ impl Hub {
                         && let Some(entry) = asked.get_mut(aid)
                     {
                         entry.2 = e.msg.get("outcome").cloned();
+                        if e.msg.pointer("/answeredBy/session").is_some() {
+                            ancestors.insert(aid.clone());
+                        } else {
+                            ancestors.remove(aid);
+                        }
                     }
                 }
                 ("out", method::SESSION_PROMPT) if current && work.turn.is_some() => {
@@ -600,6 +609,7 @@ impl Hub {
             .filter(|(id, _, _, _)| !answered.contains(&id.to_string()))
             .collect();
         work.permissions = asked;
+        work.ancestor_answers = ancestors;
         work
     }
 
@@ -748,6 +758,15 @@ impl Hub {
                     continue;
                 }
                 match decided {
+                    // An ancestor's answer that never reached the agent, under MDM's off: asked
+                    // again, so it is decided under the bound now, never resent unchecked (review
+                    // 82 of #23322; with MDM unset it is sent as before).
+                    Some(_)
+                        if self.full_access_managed_off()
+                            && work.ancestor_answers.contains(&id.to_string()) =>
+                    {
+                        self.reregister_permission(session, child, id, permission_id, request)
+                    }
                     // Decided but the answer never reached the agent: send it.
                     Some(outcome) => {
                         let _ = child.respond(id, Ok(permission_answer(outcome))).await;
@@ -829,7 +848,10 @@ impl Hub {
                     hub.set_status(&s, next);
                 }
             }
-            let _ = c.respond(agent_request_id, Ok(permission_answer(outcome))).await;
+            // An ancestor's answer: written under its fence (`subsession_answer.rs`).
+            let fence = hub.answer_fences.lock().unwrap().remove(&permission_id);
+            let answer = Ok(permission_answer(outcome));
+            let _ = c.respond_fenced(agent_request_id, answer, fence.as_ref()).await;
         });
     }
 }

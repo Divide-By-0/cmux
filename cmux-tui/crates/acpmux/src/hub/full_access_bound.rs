@@ -109,6 +109,17 @@ pub(super) type WriteSeam = std::sync::Mutex<
     Option<(tokio::sync::oneshot::Sender<()>, tokio::sync::oneshot::Receiver<()>)>,
 >;
 
+/// How long an MDM off push waits for the family messages and answers checked under the old
+/// bound to be written before it cuts them (`hold_until_written`).
+const FAMILY_WRITE_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The family gate held for one message or answer (`Hub::family_gate`), and the off pushes'
+/// cuts since it was taken.
+pub(super) struct FamilyHold {
+    gate: tokio::sync::OwnedRwLockReadGuard<()>,
+    cut: tokio::sync::watch::Receiver<u64>,
+}
+
 impl Hub {
     /// Tests only: waits at the pause a test set (`WriteSeam`), once.
     #[cfg(test)]
@@ -122,22 +133,59 @@ impl Hub {
 
     /// A family message about to reach `session`'s agent (`provenance` a family prompt's, a
     /// sub-session's retry, or a continuation of either; any other prompt: Ok(None), no gate):
-    /// checked again
-    /// (`family_dispatch_check`) under the family gate, which the caller holds until the
-    /// message is written. An MDM off push waits on the gate (`full_access_turned_off`), so a
-    /// message checked under the old bound is written before the push returns, and one checked
-    /// after it is checked under the off.
+    /// checked again (`family_dispatch_check`) under the family gate, which the caller holds
+    /// until the message is written (`hold_until_written`). An MDM off push waits on the gate
+    /// (`full_access_turned_off`), so a message checked under the old bound is written, or cut,
+    /// before the push returns, and one checked after it is checked under the off.
     pub(super) async fn family_gate(
         &self,
         session: &Session,
         provenance: Option<&Value>,
-    ) -> Result<Option<tokio::sync::RwLockReadGuard<'_, ()>>, RpcError> {
+    ) -> Result<Option<FamilyHold>, RpcError> {
         if !super::subsession_guard::is_family(provenance) {
             return Ok(None);
         }
-        let gate = self.family_gate.read().await;
+        let hold = self.family_hold().await;
         self.family_dispatch_check(session, provenance).await?;
-        Ok(Some(gate))
+        Ok(Some(hold))
+    }
+
+    /// Takes the family gate (`family_gate`), for a family message or an ancestor's answer.
+    pub(super) async fn family_hold(&self) -> FamilyHold {
+        let gate = self.family_gate.clone().read_owned().await;
+        let mut cut = self.family_cut.subscribe();
+        cut.borrow_and_update();
+        FamilyHold { gate, cut }
+    }
+
+    /// Holds `hold` until the message about to go to `session`'s agent under the returned fence
+    /// is written. An off push that waited `FAMILY_WRITE_BUDGET` cuts it: a message still queued
+    /// is then never written, and the agent whose writer has it already ends first, by an
+    /// identity the cut proves (`Fence::cut_or_end`, reviews 81 and 82 of #23322), so a push
+    /// returns in bounded time and nothing it waited for reaches the agent after it.
+    pub(super) fn hold_until_written(
+        self: &Arc<Self>,
+        session: &Arc<Session>,
+        hold: FamilyHold,
+    ) -> crate::agent::Fence {
+        let fence = crate::agent::Fence::default();
+        let FamilyHold { gate, mut cut } = hold;
+        let (held, id) = (fence.clone(), session.id.clone());
+        // task-owner: ends once the message settles (every carrier settles it) or is cut; the
+        // end of its writer below is bounded.
+        tokio::spawn(async move {
+            tokio::select! {
+                biased;
+                () = held.settled() => {}
+                _ = cut.changed() => {
+                    if !held.cut_or_end(FAMILY_WRITE_BUDGET).await {
+                        tracing::warn!(session = %id, "an MDM off push cut a family message whose agent did not end in time");
+                    }
+                }
+            }
+            drop(gate);
+        });
+        fence
     }
 
     /// Whether a mode or policy that skips every approval may run now: the settings file under
@@ -202,11 +250,14 @@ impl Hub {
     /// MDM has just forced full access off (`apply_full_access_push`): an ask that read the
     /// policy before the push (`policy_for` reads the bound under the prompt's lock, where it
     /// decides) finishes first, and so does a family message or answer checked under the old
-    /// bound (`family_gate`), so no approve-all decision made after the push returns uses the
+    /// bound (`family_gate`), written or, past `FAMILY_WRITE_BUDGET`, cut
+    /// (`hold_until_written`), so no approve-all decision made after the push returns uses the
     /// old bound.
     /// `changed`: this push turned it off; the pool drains only then.
     pub(super) async fn full_access_turned_off(&self, changed: bool) {
-        drop(self.family_gate.write().await);
+        while tokio::time::timeout(FAMILY_WRITE_BUDGET, self.family_gate.write()).await.is_err() {
+            self.family_cut.send_modify(|n| *n += 1);
+        }
         for session in self.sessions() {
             drop(session.permissions.lock().unwrap_or_else(|e| e.into_inner()));
         }
@@ -481,6 +532,11 @@ mod tests {
         });
     }
 
+    fn push_off(hub: &Arc<Hub>) -> tokio::task::JoinHandle<()> {
+        let hub = hub.clone();
+        tokio::spawn(async move { hub.apply_full_access_push(Some(false)).await })
+    }
+
     /// Waits for the first entry of `session`'s log whose kind is one of `kinds`: its kind.
     async fn logged(hub: &Hub, session: &Session, kinds: &[&str]) -> String {
         let found = async {
@@ -493,6 +549,197 @@ mod tests {
             }
         };
         tokio::time::timeout(WAIT, found).await.unwrap_or_else(|_| panic!("no {kinds:?} logged"))
+    }
+
+    /// Pauses `session`'s agent's input before the first line holding `pattern`
+    /// (`agent::InputSeam`): the line is queued, its transport takes nothing more.
+    async fn pause_input(
+        hub: &Arc<Hub>,
+        session: &Arc<Session>,
+        pattern: &str,
+    ) -> (tokio::sync::oneshot::Receiver<()>, tokio::sync::oneshot::Sender<()>) {
+        pause_input_at(hub, session, pattern, false).await
+    }
+
+    /// `pause_input`, or (`writing`) once the writer took the line and is writing it.
+    async fn pause_input_at(
+        hub: &Arc<Hub>,
+        session: &Arc<Session>,
+        pattern: &str,
+        writing: bool,
+    ) -> (tokio::sync::oneshot::Receiver<()>, tokio::sync::oneshot::Sender<()>) {
+        let agent = hub.child_for(session).await.expect("a running agent");
+        let (arrived_tx, arrived) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = tokio::sync::oneshot::channel();
+        *agent.input_seam.lock().unwrap() =
+            Some((pattern.to_owned(), writing, arrived_tx, release_rx));
+        (arrived, release)
+    }
+
+    /// A family message checked under the old bound, queued for its agent while its transport
+    /// takes nothing, then MDM's off pushed. Its input moves again 300 ms into the push, or,
+    /// `stuck`, only once the push returned. Whether the push had returned at 300 ms, and how
+    /// the message's turn ended.
+    async fn off_push_over_a_held_write(stuck: bool) -> (bool, String) {
+        let (hub, parent, child) = approve_all_parent().await;
+        let (arrived, release) = pause_input(&hub, &child, "session/prompt").await;
+        send(&hub, &parent, &child, "hello");
+        tokio::time::timeout(WAIT, arrived).await.expect("the message is queued").unwrap();
+        let push = push_off(&hub);
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let returned = push.is_finished();
+        let mut release = Some(release);
+        if !stuck {
+            let _ = release.take().map(|r| r.send(()));
+        }
+        tokio::time::timeout(WAIT, push).await.expect("the push returns").unwrap();
+        let _ = release.map(|r| r.send(()));
+        (returned, logged(&hub, &child, &["turn_end", "turn_error"]).await)
+    }
+
+    /// Review 40 of #23322: a family message queued for its agent, not yet written, holds an
+    /// off push until its transport writes it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_off_push_waits_for_a_queued_family_message_until_it_is_written() {
+        let (returned, end) = off_push_over_a_held_write(false).await;
+        assert!(
+            !returned,
+            "an off push returned while a message checked under the old bound was queued"
+        );
+        assert_eq!(end, "turn_end", "the message was written once its transport took it");
+    }
+
+    /// Review 40 of #23322: a transport that never takes the message holds the push only for a
+    /// bounded time, and the message it cut is never written after the push returns.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_off_push_cuts_a_family_message_its_transport_never_takes() {
+        let (_, end) = off_push_over_a_held_write(true).await;
+        assert_eq!(end, "turn_error", "a message the off push cut was written after it returned");
+    }
+
+    /// Review 40 of #23322: an ancestor's answer checked under the old bound holds an off push
+    /// until the answer is written to the asking agent, not only handed to the ask.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_off_push_waits_for_an_ancestors_answer_until_it_is_written() {
+        let (hub, parent, child) = approve_all_parent().await;
+        let asking = {
+            let (hub, child) = (hub.clone(), child.clone());
+            let text = vec![json!({"type": "text", "text": "question: Pick?"})];
+            tokio::spawn(async move {
+                hub.prompt_with(&child, text, "test", false, PromptOptions::default()).await
+            })
+        };
+        let pending = async {
+            loop {
+                if let Some(id) = child.permissions.lock().unwrap().pending.keys().next() {
+                    return id.clone();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        };
+        let id = tokio::time::timeout(WAIT, pending).await.expect("the child asks");
+        let (arrived, release) = pause_input(&hub, &child, "outcome").await;
+        let answer = {
+            let (hub, parent, child) = (hub.clone(), parent.clone(), child.clone());
+            tokio::spawn(async move {
+                hub.ancestor_answer(&parent, &child, &id, json!({"Pick?": "A"})).await
+            })
+        };
+        tokio::time::timeout(WAIT, arrived).await.expect("the answer is queued").unwrap();
+        let push = push_off(&hub);
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let returned = push.is_finished();
+        let _ = release.send(());
+        tokio::time::timeout(WAIT, push).await.expect("the push returns").unwrap();
+        let answered = answer.await.unwrap();
+        asking.abort();
+        assert!(answered.is_ok(), "{answered:?}");
+        assert!(
+            !returned,
+            "an off push returned while an answer checked under the old bound was queued"
+        );
+    }
+
+    /// Starts a turn on `child` that asks the question "Pick?": the ask's permission id.
+    async fn ask_pick(
+        hub: &Arc<Hub>,
+        child: &Arc<Session>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let asking = {
+            let (hub, child) = (hub.clone(), child.clone());
+            let text = vec![json!({"type": "text", "text": "question: Pick?"})];
+            tokio::spawn(async move {
+                let _ =
+                    hub.prompt_with(&child, text, "test", false, PromptOptions::default()).await;
+            })
+        };
+        let pending = async {
+            loop {
+                if let Some(id) = child.permissions.lock().unwrap().pending.keys().next() {
+                    return id.clone();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        };
+        (tokio::time::timeout(WAIT, pending).await.expect("the child asks"), asking)
+    }
+
+    /// Review 81 of #23322: two ancestors answer one question at once. The answer that lost
+    /// never takes away the fence of the one that won, so an off push still waits for the
+    /// winning answer until it is written.
+    #[tokio::test]
+    async fn a_losing_ancestor_answer_leaves_the_winners_answer_fenced() {
+        let (hub, parent, child) = approve_all_parent().await;
+        let (id, asking) = ask_pick(&hub, &child).await;
+        let (arrived, release) = pause_input(&hub, &child, "outcome").await;
+        // The later answer is checked first and pauses right before it answers.
+        let (at_tx, at) = tokio::sync::oneshot::channel();
+        let (go, go_rx) = tokio::sync::oneshot::channel();
+        *hub.family_write_seam.lock().unwrap() = Some((at_tx, go_rx));
+        let late = {
+            let (hub, parent, child, id) = (hub.clone(), parent.clone(), child.clone(), id.clone());
+            tokio::spawn(async move {
+                hub.ancestor_answer(&parent, &child, &id, json!({"Pick?": "B"})).await
+            })
+        };
+        tokio::time::timeout(WAIT, at).await.expect("the later answer is checked").unwrap();
+        // It goes on only once this thread waits: the first answer wins, then the later one
+        // loses, before the asking task writes the winner.
+        let _ = go.send(());
+        let first = hub.ancestor_answer(&parent, &child, &id, json!({"Pick?": "A"})).await;
+        let late = late.await.unwrap();
+        assert!(first.is_ok() != late.is_ok(), "one answer wins: {first:?}, {late:?}");
+        tokio::time::timeout(WAIT, arrived).await.expect("the answer is queued").unwrap();
+        let push = push_off(&hub);
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let returned = push.is_finished();
+        let _ = release.send(());
+        tokio::time::timeout(WAIT, push).await.expect("the push returns").unwrap();
+        asking.abort();
+        assert!(
+            !returned,
+            "an off push returned while the winning answer, checked under the old bound, was queued"
+        );
+    }
+
+    /// Review 81 of #23322: a message its agent's writer already took when the transport stops
+    /// taking input is cut by ending that agent at once. The push returns in bounded time even
+    /// while the chat's agent slot is held elsewhere (a stop waiting on its host), and the
+    /// message never reaches the agent.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_off_push_returns_in_time_while_a_cut_message_is_being_written() {
+        let (hub, parent, child) = approve_all_parent().await;
+        let (arrived, release) = pause_input_at(&hub, &child, "session/prompt", true).await;
+        send(&hub, &parent, &child, "hello");
+        tokio::time::timeout(WAIT, arrived).await.expect("the writer takes the message").unwrap();
+        let slot = child.child.lock().await;
+        let push = push_off(&hub);
+        let returned = tokio::time::timeout(std::time::Duration::from_secs(15), push).await;
+        drop(slot);
+        let _ = release.send(());
+        assert!(returned.is_ok(), "an off push waited on a held agent slot past its bound");
+        let end = logged(&hub, &child, &["turn_end", "turn_error"]).await;
+        assert_eq!(end, "turn_error", "a message the off push cut reached its agent");
     }
 
     /// Review 40 of #23322: a family message whose agent hit its limit after the off push is
