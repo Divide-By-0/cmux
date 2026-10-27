@@ -9,6 +9,7 @@ NAME_SET=0
 BUNDLE_SET=0
 DERIVED_SET=0
 TAG=""
+BUILD_ONLY=0
 # Matches CmuxStateDirectory (non-TCC ~/.local/state/cmux) where the app/CLI now
 # read the last-socket-path markers (https://github.com/manaflow-ai/cmux/issues/5146).
 # Resolve the real account home via getpwuid (the same syscall
@@ -55,6 +56,8 @@ Options:
   --name <app name>      Override app display/bundle name.
   --bundle-id <id>       Override bundle identifier.
   --derived-data <path>  Override derived data path.
+  --build-only           Compile and retain the Release artifact without staging,
+                         stopping, launching or replacing any app. Requires --tag.
   -h, --help             Show this help.
 EOF
 }
@@ -78,6 +81,10 @@ sanitize_path() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --build-only)
+      BUILD_ONLY=1
+      shift
+      ;;
     --tag)
       TAG="${2:-}"
       if [[ -z "$TAG" ]]; then
@@ -125,6 +132,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ "$BUILD_ONLY" -eq 1 && -z "$TAG" ]]; then
+  echo "error: --build-only requires --tag" >&2
+  exit 2
+fi
+
 if [[ -n "$TAG" ]]; then
   TAG_ID="$(sanitize_bundle "$TAG")"
   TAG_SLUG="$(sanitize_path "$TAG")"
@@ -158,6 +170,9 @@ if [[ -z "$TAG" ]]; then
     INFOPLIST_KEY_CFBundleDisplayName="$APP_NAME"
     PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID"
   )
+fi
+if [[ "${CMUX_SKIP_ZIG_BUILD:-}" == "1" ]]; then
+  XCODEBUILD_ARGS+=(CMUX_SKIP_ZIG_BUILD=1)
 fi
 XCODEBUILD_ARGS+=(build)
 
@@ -201,6 +216,12 @@ fi
 if [[ -z "${APP_PATH:-}" || ! -d "${APP_PATH}" ]]; then
   echo "${APP_NAME}.app not found in DerivedData" >&2
   exit 1
+fi
+
+if [[ "$BUILD_ONLY" -eq 1 ]]; then
+  echo "Release artifact: $APP_PATH"
+  echo "Compile-only: no app was staged, stopped, launched or replaced."
+  exit 0
 fi
 
 # Staging always copies the built app and patches the plist to set an isolated
