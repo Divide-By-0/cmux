@@ -156,6 +156,14 @@ class Daemon {
     for (const message of now) this.answer(message);
   }
 
+  /// Answers only the newest request of `method` held so far.
+  releaseLast(method: string): void {
+    const at = this.held.findLastIndex((message) => message.method === method);
+    if (at < 0) return;
+    const [message] = this.held.splice(at, 1);
+    this.answer(message!);
+  }
+
   close(): void {
     this.readyState = 3;
   }
@@ -1252,4 +1260,60 @@ test("an attach of a chat already left never takes the watch of the attach out",
   const shown = text(tab.last());
   expect(shown).toContain("a 3.");
   expect(shown).not.toContain("bee 4.");
+});
+
+test("a reconnect's attach that fails after a select took the chat over leaves the select's rows", async () => {
+  const daemon = new Daemon();
+  daemon.down = false;
+  daemon.log = turn(1, 6, "live");
+  daemon.copy = { events: turn(1, 4, "kept"), generation: 100, lastSeq: 4 };
+  const tab = open(daemon);
+  const client = await tab.client;
+  live.push(client);
+  await flush();
+  expect(text(tab.last())).toContain("live 6.");
+  // A reconnect: its attach is out when the chat is selected again, and the select's is answered
+  // first; the reconnect's then fails as if the machine were down.
+  daemon.hold.add("_acpmux/attach");
+  const reopen = (client as unknown as { open(): Promise<void> }).open().catch(() => undefined);
+  await flush();
+  daemon.onopen?.();
+  await flush();
+  const again = client.select(SESSION).catch(() => undefined);
+  await flush();
+  daemon.hold.delete("_acpmux/attach");
+  daemon.releaseLast("_acpmux/attach");
+  await flush();
+  daemon.refuseAttach = 1;
+  daemon.release("_acpmux/attach");
+  await flush();
+  await again;
+  await reopen;
+  const shown = text(tab.last());
+  expect(shown).toContain("live 6.");
+  expect(shown).not.toContain("kept ");
+  expect(tab.last()!.peerCopy).toBeUndefined();
+});
+
+test("a chat read ahead while its row named another session is not kept", async () => {
+  const daemon = new Daemon();
+  daemon.down = false;
+  daemon.other = true;
+  daemon.log = turn(1, 5, "before");
+  const tab = open(daemon, undefined, OTHER);
+  const client = await tab.client;
+  live.push(client);
+  await flush();
+  resetKeptTailsForTests();
+  daemon.hold.add("_acpmux/events");
+  client.prefetch(SESSION);
+  await flush();
+  // The machine recreated the session while the read was out.
+  daemon.createdAt = 200;
+  daemon.announce();
+  await flush();
+  daemon.hold.delete("_acpmux/events");
+  daemon.release("_acpmux/events");
+  await flush();
+  expect(keptTail(SESSION)).toBeUndefined();
 });

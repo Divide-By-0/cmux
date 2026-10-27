@@ -5601,7 +5601,8 @@ export class AcpmuxDirectClient {
         await this.typed("_acpmux/detach", { sessionId: previousSessionId }).catch(() => undefined);
       // This attach owns the chat from now: one out already (a reconnect's) changes nothing of it
       // when it answers or fails.
-      mine = ++this.copyAttaches;
+      // A select another one superseded meanwhile takes nothing (its attach returns at once).
+      mine = generation === this.selectionGeneration ? ++this.copyAttaches : this.copyAttaches;
       await this.attach(sessionId, generation, keptThrough);
       // A reconnect's attach took the chat over meanwhile: its outcome decides.
       if (mine !== this.copyAttaches) return sessionId;
