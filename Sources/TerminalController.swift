@@ -4361,6 +4361,9 @@ class TerminalController {
         case .success(let payload):
             return v2Ok(id: id, result: payload)
         case .failure(let error):
+            if error is SurfaceDisplayCreationBusy {
+                return Self.surfaceNewDisplayBusyError(id: id)
+            }
             if case VMClientError.disabledByManagedPolicy = error {
                 return v2Error(id: id, code: "cloud_disabled", message: String(describing: error))
             }

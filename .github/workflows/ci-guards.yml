@@ -270,6 +270,12 @@ jobs:
         if: ${{ matrix.group == 'preflight' }}
         run: ./tests/test_reload_build_only_keeps_tagged_app.sh
 
+      - name: Test deferred cmux updates and compile-only Release artifacts
+        if: ${{ matrix.group == 'preflight' }}
+        run: |
+          python3 tests/test_deferred_cmux_update.py
+          python3 tests/test_release_build_only.py
+
       - name: Validate reload resolves the cmux-tui client before building
         if: ${{ matrix.group == 'preflight' }}
         run: ./tests/test_reload_resolves_cmux_tui_client_before_build.sh

@@ -252,7 +252,13 @@ struct SearchIndexAgentSessionTests {
 
         // An overlapping refresh that read the pane before its session had
         // text indexes the scrollback after the session document landed.
-        manager.terminalCaptureFingerprints[context.panelID] = 7
+        manager.terminalIndexStates[context.panelID] = .init(
+            fingerprint: 7,
+            windowID: context.windowID,
+            workspaceID: context.workspaceID,
+            title: context.panelTitle,
+            location: context.location
+        )
         let scrollback = try #require(GlobalSearchDocuments.terminalDocument(for: context, text: "stale scrollback about medlars"))
         try await index.upsert(scrollback)
 

@@ -11,7 +11,7 @@ on:
   # path filter would let ordinary Swift changes merge with only ci-status from
   # the fallback workflow without validating the app.
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, labeled, unlabeled]
   merge_group:
   workflow_dispatch:
     inputs:
@@ -57,6 +57,7 @@ concurrency:
 
 jobs:
   changes:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: ${{ github.repository_owner != 'manaflow-ai' && 'ubuntu-24.04' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'blacksmith-4vcpu-ubuntu-2404' || vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 5
     outputs:
@@ -1074,6 +1075,7 @@ jobs:
             --github-output "$GITHUB_OUTPUT"
 
   fast-guards:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     name: CI fast guards
     # Keep the authoritative fast guard in this DAG. It starts beside routing
     # and static checks, so macOS admission can depend on its real result
@@ -1110,7 +1112,7 @@ jobs:
   reverse-test-impact:
     name: Reverse test impact (report only)
     needs: [changes]
-    if: ${{ github.event_name == 'pull_request' && needs.changes.result == 'success' && needs.changes.outputs.reverse_test_impact == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name == 'pull_request' && needs.changes.result == 'success' && needs.changes.outputs.reverse_test_impact == 'true') }}
     runs-on: ${{ github.repository_owner != 'manaflow-ai' && 'ubuntu-24.04' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'blacksmith-4vcpu-ubuntu-2404' || vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 5
     continue-on-error: true
@@ -1178,6 +1180,7 @@ jobs:
           retention-days: 14
 
   static-preflight:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     name: Fast static checks
     # No package installs, submodules or app build: reject malformed inputs
     # before starting macOS and the other Linux stages. Guards and web run
@@ -1210,7 +1213,7 @@ jobs:
     # gate still requires static-preflight, so starting them together lets it
     # decline ~25 s sooner without admitting macOS on a rejected diff.
     needs: [changes]
-    if: ${{ needs.changes.outputs.linux_guard_tests != 'false' || needs.changes.outputs.linux_guard_history != 'false' || needs.changes.outputs.linux_guard_cli != 'false' || needs.changes.outputs.linux_guard_source != 'false' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (needs.changes.outputs.linux_guard_tests != 'false' || needs.changes.outputs.linux_guard_history != 'false' || needs.changes.outputs.linux_guard_cli != 'false' || needs.changes.outputs.linux_guard_source != 'false') }}
     permissions:
       contents: read
     uses: ./.github/workflows/ci-guards.yml
@@ -1223,7 +1226,7 @@ jobs:
 
   ghosttykit-release-check:
     needs: [changes]
-    if: ${{ needs.changes.outputs.ghosttykit_release == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (needs.changes.outputs.ghosttykit_release == 'true') }}
     name: GhosttyKit release check
     permissions:
       contents: read
@@ -1254,12 +1257,12 @@ jobs:
 
   browser:
     needs: [changes]
-    if: ${{ needs.changes.outputs.browser == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (needs.changes.outputs.browser == 'true') }}
     uses: ./.github/workflows/cmux-browser.yml
 
   remote-daemon:
     needs: [changes, static-preflight]
-    if: ${{ needs.changes.outputs.remote_daemon == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (needs.changes.outputs.remote_daemon == 'true') }}
     permissions:
       contents: read
       pull-requests: read
@@ -1274,7 +1277,7 @@ jobs:
   web:
     # Beside static-preflight for the same reason as guards.
     needs: [changes]
-    if: ${{ needs.changes.outputs.web != 'false' || needs.changes.outputs.agent_session_web != 'false' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (needs.changes.outputs.web != 'false' || needs.changes.outputs.agent_session_web != 'false') }}
     uses: ./.github/workflows/ci-web.yml
     with:
       web: ${{ needs.changes.outputs.web }}
@@ -1284,7 +1287,7 @@ jobs:
   claude-wrapper:
     name: Claude wrapper regressions
     needs: [changes, static-preflight]
-    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.static-preflight.result == 'success' && (needs.changes.outputs.claude_wrapper == 'true' || (needs.changes.outputs.macos == 'true' && needs.changes.outputs.full_suite == 'true')) }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled() && needs.changes.result == 'success' && needs.static-preflight.result == 'success' && (needs.changes.outputs.claude_wrapper == 'true' || (needs.changes.outputs.macos == 'true' && needs.changes.outputs.full_suite == 'true'))) }}
     runs-on: ${{ github.repository_owner != 'manaflow-ai' && 'macos-26' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && !contains(fromJSON(needs.changes.outputs.owned_head_repos), github.event.pull_request.head.repo.full_name) && (startsWith(needs.changes.outputs.macos_pr_runner, 'blacksmith-') && needs.changes.outputs.macos_pr_runner || 'blacksmith-6vcpu-macos-15') || github.event_name == 'pull_request' && (github.run_attempt > 2 && github.triggering_actor == 'github-actions[bot]' || !contains(needs.changes.outputs.macos_pr_owned_jobs, ' claude-wrapper ')) && needs.changes.outputs.macos_pr_retry_runner || github.event_name == 'pull_request' && ((contains(needs.changes.outputs.macos_pr_light_side_jobs, ' claude-wrapper ') && needs.changes.outputs.macos_pr_light_side_runner || needs.changes.outputs.macos_pr_side_runner) || needs.changes.outputs.macos_pr_runner || vars.MACOS_RUNNER_PR || 'blacksmith-6vcpu-macos-15') || github.event_name == 'workflow_dispatch' && github.run_attempt <= 2 && contains(needs.changes.outputs.macos_pr_owned_jobs, ' claude-wrapper ') && (needs.changes.outputs.macos_pr_side_runner || needs.changes.outputs.macos_pr_runner) || vars.CI_PAID_MACOS_OVERFLOW == '1' && vars.MACOS_RUNNER_15 || 'blacksmith-6vcpu-macos-15') }}
     # Normally 1-2 minutes, but it spawns hundreds of short bash, perl and node
     # processes, so a mini saturated by a compile beside it stretches it:
@@ -1369,7 +1372,7 @@ jobs:
       - browser
       - guards
       - web
-    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.result == 'success' && needs.static-preflight.result == 'success' && (needs.changes.outputs.macos != 'false' || needs.changes.outputs.cli == 'true') && (needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.cli == 'true' || needs.changes.outputs.compile_admitted != 'true') }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled() && github.event_name == 'pull_request' && needs.changes.result == 'success' && needs.static-preflight.result == 'success' && (needs.changes.outputs.macos != 'false' || needs.changes.outputs.cli == 'true') && (needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.cli == 'true' || needs.changes.outputs.compile_admitted != 'true')) }}
     runs-on: ${{ github.repository_owner != 'manaflow-ai' && 'ubuntu-24.04' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'blacksmith-4vcpu-ubuntu-2404' || vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 5
     permissions: {}
@@ -1403,7 +1406,7 @@ jobs:
     # admission and would otherwise be skipped whenever the app-host product is
     # already admitted or the macOS area is neutral (a Packages/iOS package
     # outside the desktop closure). Other jobs retain their macos/cli gates.
-    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.static-preflight.result == 'success' && (((needs.changes.outputs.macos != 'false' || needs.changes.outputs.cli == 'true') && (needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.unit_suite == 'true' || needs.changes.outputs.cli == 'true' || needs.changes.outputs.compile_admitted != 'true')) || needs.changes.outputs.swift_packages == 'true') }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled() && needs.changes.result == 'success' && needs.static-preflight.result == 'success' && (((needs.changes.outputs.macos != 'false' || needs.changes.outputs.cli == 'true') && (needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.unit_suite == 'true' || needs.changes.outputs.cli == 'true' || needs.changes.outputs.compile_admitted != 'true')) || needs.changes.outputs.swift_packages == 'true')) }}
     permissions:
       actions: read
       id-token: write
@@ -1456,7 +1459,7 @@ jobs:
     # This replaces the old unconditional `if: ${{ always() }}`: if the change
     # router explicitly says macOS is irrelevant, skip the runner allocation.
     # Missing/invalid route output fails open by running the preflight.
-    if: ${{ !cancelled() && needs.changes.outputs.macos != 'false' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled() && needs.changes.outputs.macos != 'false') }}
     runs-on: ${{ github.repository_owner != 'manaflow-ai' && 'ubuntu-24.04' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'blacksmith-4vcpu-ubuntu-2404' || vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 5
     steps:
@@ -1566,7 +1569,7 @@ jobs:
     # is deliberate, and for an unread diff "full-ci" runs everything.
     needs:
       - changes
-    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.coverage_gap == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled() && needs.changes.result == 'success' && needs.changes.outputs.coverage_gap == 'true') }}
     runs-on: ${{ github.repository_owner != 'manaflow-ai' && 'ubuntu-24.04' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'blacksmith-4vcpu-ubuntu-2404' || vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
     steps:
       - name: Require the suite that judges this diff
@@ -1618,7 +1621,7 @@ jobs:
     # The route/controller lane is disabled while its infra cancellation bug is
     # repaired. Re-enable with the repository variable CI_UI_TESTS_ENABLED=1;
     # selectors still keep dispatches limited to UI-touching diffs.
-    if: ${{ vars.CI_UI_TESTS_ENABLED == '1' && !cancelled() && needs.changes.result == 'success' && needs.static-preflight.result == 'success' && (needs.macos-admission-gate.result == 'success' || needs.macos-admission-gate.result == 'skipped' && needs.changes.outputs.compile_admitted == 'true') && needs.changes.outputs.ui_selectors != '' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (vars.CI_UI_TESTS_ENABLED == '1' && !cancelled() && needs.changes.result == 'success' && needs.static-preflight.result == 'success' && (needs.macos-admission-gate.result == 'success' || needs.macos-admission-gate.result == 'skipped' && needs.changes.outputs.compile_admitted == 'true') && needs.changes.outputs.ui_selectors != '') }}
     runs-on: ${{ github.repository_owner != 'manaflow-ai' && 'ubuntu-24.04' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'blacksmith-4vcpu-ubuntu-2404' || vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
     # A compile wait of up to 50 minutes, then the tests.
     timeout-minutes: 150
@@ -1682,7 +1685,7 @@ jobs:
     # <!-- cmux:dogfood-build -->
     name: "Dogfood build #${{ github.event.pull_request.number }}"
     needs: [changes, static-preflight]
-    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'feat-cmux-next' && contains(github.event.pull_request.labels.*.name, 'dev-build') && github.event.action != 'unlabeled' && (github.event.action != 'labeled' || github.event.label.name == 'dev-build') && github.repository_owner == 'manaflow-ai' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'OWNER') && needs.changes.result == 'success' && needs.static-preflight.result == 'success' && (needs.changes.outputs.macos != 'false' || needs.changes.outputs.delta_base_sha != '') }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'feat-cmux-next' && contains(github.event.pull_request.labels.*.name, 'dev-build') && github.event.action != 'unlabeled' && (github.event.action != 'labeled' || github.event.label.name == 'dev-build') && github.repository_owner == 'manaflow-ai' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'OWNER') && needs.changes.result == 'success' && needs.static-preflight.result == 'success' && (needs.changes.outputs.macos != 'false' || needs.changes.outputs.delta_base_sha != '')) }}
     runs-on: ${{ github.repository_owner != 'manaflow-ai' && 'macos-26' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'blacksmith-6vcpu-macos-26' || vars.MACOS_RUNNER_PR || 'blacksmith-6vcpu-macos-26' }}
     timeout-minutes: 45
     # This job is intentionally outside ci-status, so a build or publication
@@ -1757,7 +1760,7 @@ jobs:
       - macos
     # A cancelled run already has its terminal outcome; the required status
     # remains cancelled and does not need a post-cancel rollup.
-    if: ${{ !cancelled() }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled()) }}
     runs-on: ${{ github.repository_owner != 'manaflow-ai' && 'ubuntu-24.04' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'blacksmith-4vcpu-ubuntu-2404' || vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
     # These verdict steps read `needs` and decide. Their siblings are bounded
     # at 5 to 20 minutes; this job was inheriting the six-hour default, as the
@@ -1932,7 +1935,7 @@ jobs:
       - linux-preflight
       - macos-admission-gate
       - macos
-    if: ${{ !cancelled() }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled()) }}
     runs-on: ${{ github.repository_owner != 'manaflow-ai' && 'ubuntu-24.04' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'blacksmith-4vcpu-ubuntu-2404' || vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 5
     continue-on-error: true
