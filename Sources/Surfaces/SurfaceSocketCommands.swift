@@ -126,11 +126,7 @@ extension TerminalController {
             let destination = options.open ? surfaceNewDisplayDestination(params) : nil
             if options.open, destination == nil { return surfaceNewDisplayWorkspaceError(id: id) }
             return v2VmCall(id: id, timeoutSeconds: 240) {
-                do {
-                    return try await Self.surfaceNewDisplay(options, destination: destination)
-                } catch is SurfaceDisplayCreationBusy {
-                    return Self.surfaceNewDisplayBusyError(id: id)
-                }
+                try await Self.surfaceNewDisplay(options, destination: destination)
             }
 
         default:
@@ -256,7 +252,7 @@ extension TerminalController {
         )
     }
 
-    private nonisolated static func surfaceNewDisplayBusyError(id: Any?) -> String {
+    nonisolated static func surfaceNewDisplayBusyError(id: Any?) -> String {
         guard let idValue = JSONValue(foundationObject: id) else {
             return ControlResponseEncoder.encodeFailureResponse
         }
@@ -308,7 +304,7 @@ extension TerminalController {
     }
 
     /// The catalog can cancel creation while the request itself remains live.
-    private struct SurfaceDisplayCreationBusy: Error {}
+    struct SurfaceDisplayCreationBusy: Error {}
 
     private nonisolated static let surfaceDisplayProjectionFailureMessage = String(
         localized: "socket.surface.newDisplay.projectionFailed",
