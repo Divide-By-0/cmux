@@ -273,7 +273,7 @@ async fn an_incompatible_controller_is_refused_and_the_agent_keeps_running() {
     .unwrap();
     let reply: HostFrame = agent_host::read_frame(&mut rd).await.unwrap().unwrap();
     assert!(
-        matches!(reply, HostFrame::Incompatible { min: 1, max: 1, .. }),
+        matches!(reply, HostFrame::Incompatible { min: 1, max: 2, .. }),
         "expected Incompatible, got {reply:?}"
     );
     assert_eq!(
@@ -522,5 +522,77 @@ fn discovery_rejects_linked_records_and_socket_paths_outside_the_host_namespace(
     assert_eq!(bad.len(), 2, "each refused record is reported: {bad:#?}");
     assert!(outside_socket.exists(), "discovery removed a path outside the hosts directory");
     assert_eq!(std::fs::symlink_metadata(&hosts).unwrap().permissions().mode() & 0o777, 0o700);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review 81 of #23322: a fenced line (a family message or answer an MDM off push waits for)
+/// settles once the host wrote it to its harness, not once its frame is in the host's socket:
+/// a harness that reads nothing yet holds it.
+#[tokio::test]
+async fn a_fenced_line_settles_once_the_harness_has_it() {
+    let dir = scratch("fenced");
+    let slow = dir.join("agent");
+    // Reads nothing for 3 s: the host's write of a line larger than the pipe waits that long.
+    write_executable(&slow, "#!/bin/sh\nsleep 3\nexec cat >/dev/null\n");
+    let mut launch = spec(&dir, "s-fenced");
+    launch.program = slow.to_string_lossy().into_owned();
+    launch.args.clear();
+    let record = link::spawn(&launcher(), &launch).await.expect("spawn host");
+    let lock = live_lock(&dir, &record);
+    let (owner, _) = connected(&record, 0).await;
+    let fence = acpmux::agent::Fence::default();
+    let msg = json!({"jsonrpc": "2.0", "method": "note", "params": {"text": "x".repeat(1 << 20)}});
+    owner.line_fenced(msg, Some(fence.clone())).await.unwrap();
+    let settled = fence.settled();
+    tokio::pin!(settled);
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), &mut settled).await.is_err(),
+        "a fenced line settled before its harness read it"
+    );
+    tokio::time::timeout(Duration::from_secs(20), settled)
+        .await
+        .expect("the line settles once its harness reads it");
+    let mut logged = 0;
+    owner.terminate(Duration::from_millis(500)).await.unwrap();
+    read_until(&owner, &mut logged, |e| matches!(e, Entry::Exit { .. })).await;
+    wait_dead(lock).await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review 82 of #23322: a fenced line the host has but its harness has not read yet stays
+/// unsettled when its controller's connection is replaced (`ChildAgent::reattach`), and
+/// settles once the harness reads it, through the new connection.
+#[tokio::test]
+async fn a_fenced_line_keeps_its_receipt_across_a_new_connection() {
+    let dir = scratch("refenced");
+    let slow = dir.join("agent");
+    // Reads nothing for 3 s: the host's write of a line larger than the pipe waits that long.
+    write_executable(&slow, "#!/bin/sh\nsleep 3\nexec cat >/dev/null\n");
+    let mut launch = spec(&dir, "s-refenced");
+    launch.program = slow.to_string_lossy().into_owned();
+    launch.args.clear();
+    let record = link::spawn(&launcher(), &launch).await.expect("spawn host");
+    let lock = live_lock(&dir, &record);
+    let (first, _) = connected(&record, 0).await;
+    let fence = acpmux::agent::Fence::default();
+    let msg = json!({"jsonrpc": "2.0", "method": "note", "params": {"text": "x".repeat(1 << 20)}});
+    first.line_fenced(msg, Some(fence.clone())).await.unwrap();
+    // The frame is in the host before its connection is replaced.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (second, _) = connected(&record, 0).await;
+    drop(first);
+    let settled = fence.settled();
+    tokio::pin!(settled);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), &mut settled).await.is_err(),
+        "a fenced line settled while its harness had not read it"
+    );
+    tokio::time::timeout(Duration::from_secs(20), settled)
+        .await
+        .expect("the line settles through the new connection once its harness reads it");
+    let mut logged = 0;
+    second.terminate(Duration::from_millis(500)).await.unwrap();
+    read_until(&second, &mut logged, |e| matches!(e, Entry::Exit { .. })).await;
+    wait_dead(lock).await;
     let _ = std::fs::remove_dir_all(&dir);
 }

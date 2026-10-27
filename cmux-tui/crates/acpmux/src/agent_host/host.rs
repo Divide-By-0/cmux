@@ -168,12 +168,21 @@ fn lock_live_file(path: &Path) -> Result<std::fs::File> {
 }
 
 /// What the event loop reacts to.
+/// What the harness's stdin writer takes, in order.
+enum Stdin {
+    Line(String),
+    /// A receipt (`ControllerFrame::Line`): answered once the lines before it are written.
+    Receipt(u64),
+}
+
 enum Event {
     Stdout(Option<String>),
     Stderr(Option<String>),
     Exited(Option<i32>),
     Accepted(tokio::net::UnixStream),
     Frame(u64, Option<ControllerFrame>),
+    /// The harness's stdin has every line queued before the receipt.
+    Written(u64),
     /// SIGTERM: end the harness and the host. Also sent when no daemon
     /// can adopt this host any more (`watch_record`, a pooled host's lost
     /// controller).
@@ -245,7 +254,10 @@ struct State {
     controller: Option<Controller>,
     /// Unbounded: a harness that stops reading never blocks the loop; what
     /// waits here is bounded by the controller, which waits for answers.
-    stdin_tx: mpsc::UnboundedSender<String>,
+    stdin_tx: mpsc::UnboundedSender<Stdin>,
+    /// Receipts written while no controller was resumed (`Event::Written`): one per fenced
+    /// line, which its controller waits for.
+    receipts_owed: Vec<u64>,
     translator: Option<Arc<Translator>>,
     /// `codex app-server` bridged in process (`codex_app_server.rs`).
     codex: Option<Arc<crate::codex_app_server::Translator>>,
@@ -299,12 +311,26 @@ impl Started {
         let pgid = child.id().map(|p| p as i32);
 
         // stdin writer: a full pipe never blocks the event loop.
-        let (stdin_tx, mut stdin_rx) = mpsc::unbounded_channel::<String>();
+        let (stdin_tx, mut stdin_rx) = mpsc::unbounded_channel::<Stdin>();
+        let written = events_tx.clone();
+        // task-owner: ends with the queue (the host's state) or the harness's stdin.
         tokio::spawn(async move {
             let mut stdin = stdin;
-            while let Some(line) = stdin_rx.recv().await {
-                if stdin.write_all(line.as_bytes()).await.is_err() || stdin.flush().await.is_err() {
-                    break;
+            while let Some(item) = stdin_rx.recv().await {
+                match item {
+                    Stdin::Line(line) => {
+                        if stdin.write_all(line.as_bytes()).await.is_err()
+                            || stdin.flush().await.is_err()
+                        {
+                            break;
+                        }
+                    }
+                    // Every line queued before it is written.
+                    Stdin::Receipt(receipt) => {
+                        if written.send(Event::Written(receipt)).await.is_err() {
+                            break;
+                        }
+                    }
                 }
             }
         });
@@ -417,6 +443,7 @@ impl Started {
             pending_conns: Vec::new(),
             controller: None,
             stdin_tx,
+            receipts_owed: Vec::new(),
             translator,
             codex,
             pgid,
@@ -544,6 +571,12 @@ impl Started {
                     state.pending_conns.push((id, tx));
                 }
                 Event::Frame(id, frame) => state.on_frame(id, frame).await,
+                // To the controller now: a controller that replaced the one that asked (a
+                // reattach) settles it; with none, the next one gets it once it resumes.
+                Event::Written(receipt) => match state.controller.as_ref() {
+                    Some(c) if c.resumed && c.tx.send(HostFrame::Written { receipt }).is_ok() => {}
+                    _ => state.receipts_owed.push(receipt),
+                },
             }
             if state.unadoptable {
                 // As SIGTERM: end the harness while its group is ours, then the host.
@@ -784,7 +817,7 @@ impl State {
             msg: Message::notification(crate::codex_app_server::STDIN_KIND, line.clone())
                 .to_value(),
         });
-        let _ = self.stdin_tx.send(crate::codex_app_server::line(&line));
+        let _ = self.stdin_tx.send(Stdin::Line(crate::codex_app_server::line(&line)));
     }
 
     fn write_claude_line(&mut self, line: Value) {
@@ -794,7 +827,7 @@ impl State {
         });
         let mut s = line.to_string();
         s.push('\n');
-        let _ = self.stdin_tx.send(s);
+        let _ = self.stdin_tx.send(Stdin::Line(s));
     }
 
     async fn on_line(&mut self, msg: Value) {
@@ -812,7 +845,7 @@ impl State {
         }
         let Some(tr) = self.translator.clone() else {
             self.push(Entry::Tap { dir: TapDir::Out, msg: message.to_value() });
-            let _ = self.stdin_tx.send(message.to_line());
+            let _ = self.stdin_tx.send(Stdin::Line(message.to_line()));
             return;
         };
         self.push(Entry::Tap { dir: TapDir::Out, msg: message.to_value() });
@@ -901,8 +934,18 @@ impl State {
                     }
                 }
                 c.resumed = true;
+                // Receipts no controller took (`Event::Written`).
+                for receipt in std::mem::take(&mut self.receipts_owed) {
+                    let _ = c.tx.send(HostFrame::Written { receipt });
+                }
             }
-            ControllerFrame::Line { msg } => self.on_line(msg).await,
+            ControllerFrame::Line { msg, receipt } => {
+                self.on_line(msg).await;
+                // Behind every line of it: the writer answers once they are written.
+                if let Some(receipt) = receipt {
+                    let _ = self.stdin_tx.send(Stdin::Receipt(receipt));
+                }
+            }
             ControllerFrame::Ack { h } => self.drop_through(h),
             ControllerFrame::Terminate { grace_ms } => {
                 if let Some(pg) = self

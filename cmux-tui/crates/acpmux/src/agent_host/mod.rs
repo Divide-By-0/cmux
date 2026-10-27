@@ -48,7 +48,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Oldest and newest host protocol this build speaks.
 pub const PROTOCOL_MIN: u16 = 1;
-pub const PROTOCOL_MAX: u16 = 1;
+pub const PROTOCOL_MAX: u16 = 2;
+/// The protocol from which a `line` may ask for a receipt (`HostFrame::Written`).
+pub const RECEIPT_VERSION: u16 = 2;
 /// Discovery record schema this build writes and reads.
 pub const RECORD_VERSION: u32 = 1;
 /// Largest frame either side accepts.
@@ -74,8 +76,13 @@ pub enum ControllerFrame {
     Resume { after: u64 },
     /// One ACP message for the harness. The host translates it when the
     /// harness speaks Claude stream-json, writes it, and echoes the written
-    /// lines as `tap` entries.
-    Line { msg: Value },
+    /// lines as `tap` entries. `receipt` (protocol 2): the host answers
+    /// `written` with it once every line of it is written to the harness.
+    Line {
+        msg: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        receipt: Option<u64>,
+    },
     /// Entries up to `h` are in the controller's log; the host may drop them.
     Ack { h: u64 },
     /// End the harness process group: SIGTERM, then SIGKILL after `grace_ms`.
@@ -117,6 +124,11 @@ pub enum HostFrame {
     },
     DetachAck,
     TerminateAck,
+    /// Every line of the `line` that asked for `receipt` is written to the harness. Sent to
+    /// the controller connected then (or the next one), whichever connection asked.
+    Written {
+        receipt: u64,
+    },
     /// Another owner connection took over this host.
     Superseded,
     /// Answer to `query`; all fields are null for a native ACP harness.
@@ -271,6 +283,11 @@ pub fn record_path(dir: &Path, session_id: &str) -> PathBuf {
 
 fn live_path(dir: &Path, session_id: &str, nonce: &str) -> PathBuf {
     dir.join(format!("{session_id}.{nonce}.live"))
+}
+
+/// Whether host incarnation `nonce` of `session_id` keeps its live lock in `dir`.
+pub fn live_lock_exists(dir: &Path, session_id: &str, nonce: &str) -> bool {
+    live_path(dir, session_id, nonce).exists()
 }
 
 /// Socket for one host: next to the record when the path is short enough for
