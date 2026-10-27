@@ -609,6 +609,13 @@ pub(super) async fn canary(exec: &Path, bound: &Bound) -> Result<(), String> {
 }
 
 impl Hub {
+    /// Integration-test probe only; does not enable the Linux spawn path.
+    #[doc(hidden)]
+    #[cfg(target_os = "linux")]
+    pub fn linux_sandbox_probe_for_tests() -> Result<(), String> {
+        crate::linux_sandbox::bwrap::probe(Path::new("/usr/bin/bwrap")).map_err(|e| e.to_string())
+    }
+
     /// Whether `session` is a remote chain's Claude Code session (remote
     /// origin, a claude-stdio profile): one that runs in the sandbox. A
     /// profile that cannot be read now counts as one (fail closed).
