@@ -138,39 +138,17 @@ final class ScreenContentView: NSView {
 
     /// The backing scale the frames were last computed at (`reconcile`), nil before the first pass.
     private(set) var reconciledScale: CGFloat?
-    /// The camera is changing the bounds. AppKit can synchronously report that as a backing change.
-    private var cameraApplicationDepth = 0
-    var isApplyingCamera: Bool { cameraApplicationDepth > 0 }
-    /// A backing callback that arrived while the camera was changing its bounds. It is handled after
-    /// the outer reconcile has recorded the current scale, or after a direct camera gesture returns.
-    private var backingChangePending = false
-    private var reconcileDepth = 0
+    /// `applyCamera` is setting the bounds (the canvas camera).
+    var isApplyingCamera = false
     /// Reconcile passes, cumulative (ScreenBackingChangeTests: a bounds change is not a backing change).
     private(set) var reconcilePasses = 0
-
-    func beginCameraApplication() {
-        cameraApplicationDepth += 1
-    }
-
-    func endCameraApplication() {
-        cameraApplicationDepth -= 1
-        guard cameraApplicationDepth == 0, reconcileDepth == 0, backingChangePending else { return }
-        backingChangePending = false
-        guard window != nil, reconciledScale != scale else { return }
-        reconcileAndScroll()
-    }
 
     /// Only a real scale change (the window moved to a display of another scale) lays out again.
     /// AppKit also calls this inside `setBoundsSize`, which the canvas camera sets (`applyCamera`):
     /// reconciling there set the bounds again and recursed until the stack overflowed (Crash D, #24998).
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
-        guard window != nil else { return }
-        if isApplyingCamera {
-            backingChangePending = true
-            return
-        }
-        guard reconciledScale != scale else { return }
+        guard !isApplyingCamera, window != nil, reconciledScale != scale else { return }
         reconcileAndScroll()
     }
 
@@ -219,16 +197,6 @@ final class ScreenContentView: NSView {
 
     @discardableResult
     func reconcile(animated: Bool, structural: Bool = false, unzooming: Bool = false, zooming: Bool = false) -> Bool {
-        reconcileDepth += 1
-        defer {
-            reconcileDepth -= 1
-            if reconcileDepth == 0, backingChangePending {
-                backingChangePending = false
-                if window != nil, reconciledScale != scale {
-                    reconcileAndScroll()
-                }
-            }
-        }
         let shown = rowDragPreview.map { layout.settingRowHeights($0.heights, for: $0.column) } ?? layout
         let before = geometry
         // One style read per pass: it is resolved from the settings.

@@ -46,8 +46,8 @@ extension ScreenContentView {
         let target = canvasState.canvas != nil ? canvasState.camera.shown.visibleRect(viewport: size) : CGRect(origin: .zero, size: size)
         guard bounds != target else { return }
         // AppKit reports a bounds size change as a backing change: it must not reconcile (Crash D).
-        beginCameraApplication()
-        defer { endCameraApplication() }
+        isApplyingCamera = true
+        defer { isApplyingCamera = false }
         if bounds.size != target.size { setBoundsSize(target.size) }
         if bounds.origin != target.origin { setBoundsOrigin(target.origin) }
         if canvasState.canvas != nil { context.model.reportCanvasViewport(size, for: screenID) }
