@@ -223,6 +223,8 @@ final class ActiveLookGlassEffectView: NSGlassEffectView {
         let selector = NSSelectorFromString("_windowChangedKeyState")
         guard let implementation = Self.superImplementation(selector) else { return }
         ActiveLookScope.during(window) { unsafeBitCast(implementation, to: Method.self)(self, selector) }
+        ActiveLookScope.dlog("keychange key=\(window?.isKeyWindow ?? false)"); ActiveLookScope.dumpStats()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { ActiveLookScope.dumpStats() }
     }
 
     /// The glass's own implementation (NSView's when it has none), or nil when AppKit has none.
@@ -312,8 +314,17 @@ enum ActiveLookScope {
         return count >= confirmations ? pair.first : nil
     }
 
+    static var stats: [String: Int] = [:]
+    static func dlog(_ line: String) {
+        let url = URL(fileURLWithPath: "/tmp/cmux-glass-diag3.txt")
+        let data = Data((line + "\n").utf8)
+        if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(data); try? h.close() } else { try? data.write(to: url) }
+    }
+    static func dumpStats() { dlog("stats \(stats.sorted { $0.key < $1.key }) material=\(materialSite.map { String($0, radix: 16) } ?? "nil")") }
+
     private static func finishCalibration() {
-        defer { pending.removeAll() }
+        dlog("finish pending=\(pending.map { "\(String($0.site, radix: 16))<-\(String($0.caller, radix: 16))" }) cand=\(String(describing: candidate))")
+        defer { pending.removeAll(); dlog("  -> material=\(materialSite.map { String($0, radix: 16) } ?? "nil")") }
         // An update with no calibration reads (no graph update) says nothing.
         guard !pending.isEmpty else { return }
         materialSite = confirm(pair(in: pending), candidate: &candidate)
@@ -342,6 +353,7 @@ enum ActiveLookScope {
 
     private static func decide(_ window: NSWindow, answer: Bool) -> Bool {
         // Outside a glass update for this window, or a key window once calibrated: AppKit's answer.
+        stats["\(type(of: window)) a=\(answer) in=\(windows.last == ObjectIdentifier(window)) m=\(materialSite != nil)", default: 0] += 1
         guard windows.last == ObjectIdentifier(window), materialSite == nil || !answer else { return answer }
         var frames = [UnsafeMutableRawPointer?](repeating: nil, count: depth)
         let count = Int(frames.withUnsafeMutableBufferPointer { backtrace($0.baseAddress, Int32(depth)) })
@@ -349,7 +361,7 @@ enum ActiveLookScope {
         guard let reader = (0..<count).first(where: { kind(of: frames[$0]) == .appKit }), reader + 1 < count,
               frames[(reader + 1)..<count].contains(where: { kind(of: $0) == .swiftUI }),
               let site = frames[reader].map({ UInt(bitPattern: $0) }) else { return answer }
-        if let materialSite { return site == materialSite }
+        if let materialSite { stats["forced=\(site == materialSite) \(String(site, radix: 16))", default: 0] += 1; return site == materialSite }
         if let caller = frames[reader + 1].map({ UInt(bitPattern: $0) }) { pending.append(Read(site: site, caller: caller)) }
         return answer
     }
