@@ -314,6 +314,13 @@ enum ActiveLookScope {
 
     private static func finishCalibration() {
         defer { pending.removeAll() }
+        if !pending.isEmpty, diagLines < 400 {
+            diagLines += 1
+            let line = "finish pending=\(pending.map { "\(String($0.site, radix: 16))<-\(String($0.caller, radix: 16))" }) pair=\(String(describing: pair(in: pending)))\n"
+            let url = URL(fileURLWithPath: "/tmp/cmux-glass-diag.txt")
+            if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); try? h.close() }
+            else { try? line.write(to: url, atomically: true, encoding: .utf8) }
+        }
         // An update with no calibration reads (no graph update) says nothing.
         guard !pending.isEmpty else { return }
         materialSite = confirm(pair(in: pending), candidate: &candidate)
@@ -340,7 +347,28 @@ enum ActiveLookScope {
         }
     }
 
+    nonisolated(unsafe) static var diagLines = 0
+    static func diag(_ window: NSWindow, answer: Bool) {
+        guard diagLines < 400 else { return }
+        var frames = [UnsafeMutableRawPointer?](repeating: nil, count: 40)
+        let count = Int(frames.withUnsafeMutableBufferPointer { backtrace($0.baseAddress, 40) })
+        guard frames[0..<count].contains(where: { isSwiftUI(image(of: $0)) }) || !windows.isEmpty else { return }
+        diagLines += 1
+        var line = "read win=\(type(of: window)) \(ObjectIdentifier(window).hashValue) answer=\(answer) scope=\(windows.map(\.hashValue)) material=\(materialSite.map { String($0, radix: 16) } ?? "nil") pending=\(pending.count)\n"
+        for i in 0..<count {
+            var info = Dl_info()
+            guard let f = frames[i], dladdr(f, &info) != 0 else { continue }
+            let name = info.dli_sname.map { String(cString: $0) } ?? "?"
+            let file = info.dli_fname.map { String(cString: $0).split(separator: "/").last.map(String.init) ?? "" } ?? ""
+            line += "  \(i) \(file) \(name.prefix(90))+\(UInt(bitPattern: f) - UInt(bitPattern: info.dli_saddr)) [\(String(UInt(bitPattern: f), radix: 16))]\n"
+        }
+        let url = URL(fileURLWithPath: "/tmp/cmux-glass-diag.txt")
+        if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); try? h.close() }
+        else { try? line.write(to: url, atomically: true, encoding: .utf8) }
+    }
+
     private static func decide(_ window: NSWindow, answer: Bool) -> Bool {
+        diag(window, answer: answer)
         // Outside a glass update for this window, or a key window once calibrated: AppKit's answer.
         guard windows.last == ObjectIdentifier(window), materialSite == nil || !answer else { return answer }
         var frames = [UnsafeMutableRawPointer?](repeating: nil, count: depth)
