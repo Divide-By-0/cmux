@@ -47,7 +47,7 @@ def verify_signature(bundle):
 
 def active_cmux_pids():
     # Read executable paths, not command arguments or terminal contents.
-    rows = subprocess.check_output(["/bin/ps", "-axo", "pid=,comm="], text=True)
+    rows = subprocess.check_output(["/bin/ps", "-axww", "-o", "pid=,comm="], text=True)
     pids = []
     for row in rows.splitlines():
         parts = row.strip().split(None, 1)
