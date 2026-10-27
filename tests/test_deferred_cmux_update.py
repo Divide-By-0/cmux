@@ -54,6 +54,13 @@ class DeferredUpdateTests(unittest.TestCase):
         self.assertEqual(self.apply()['state'], 'installed')
         self.assertEqual(self.binary(self.payload), b'original')
 
+    def test_completed_watcher_leaves_a_future_official_update_alone(self):
+        self.apply()
+        (self.target / 'Contents/MacOS/cmux').write_bytes(b'future-official-update')
+        result = update.watch(self.manifest, process_finder=lambda: self.fail('completed watcher must stay inactive'))
+        self.assertTrue(result['already_completed'])
+        self.assertEqual(self.binary(self.target), b'future-official-update')
+
     def test_tampered_payload_is_refused(self):
         (self.payload / 'Contents/MacOS/cmux').write_bytes(b'tampered')
         with self.assertRaises(update.UpdateRefused):

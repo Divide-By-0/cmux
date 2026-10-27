@@ -159,6 +159,8 @@ def wait_for_exit(pids):
 
 
 def watch(manifest, process_finder=active_cmux_pids, validator=verify_signature):
+    if json.loads(Path(manifest).read_text())["state"] == "installed":
+        return dict(state="installed", already_completed=True)
     while True:
         result = apply_once(manifest, process_finder=process_finder, validator=validator)
         print(json.dumps(result), flush=True)
