@@ -15,10 +15,10 @@ final class GlobalSearchPanelCaptureManager {
     private var markdownCaptureTimers: [UUID: DispatchSourceTimer] = [:]
     private var markdownCaptureTasks: [UUID: Task<Void, Never>] = [:]
     private var markdownCaptureTaskIDs: [UUID: UUID] = [:]
-    /// Last indexed scrollback fingerprint per terminal panel, to skip
-    /// unchanged re-captures across palette opens. Internal so tests can
-    /// stand in for a scrollback capture.
-    var terminalCaptureFingerprints: [UUID: UInt64] = [:]
+    /// Last indexed scrollback and metadata per terminal panel. A rename or
+    /// move must refresh the document even when its text has not changed.
+    /// Internal so tests can stand in for a scrollback capture.
+    var terminalIndexStates: [UUID: TerminalIndexState] = [:]
     /// What each agent-session panel last indexed, to skip unchanged upserts.
     private var agentSessionIndexStates: [UUID: AgentSessionIndexState] = [:]
     /// Terminal panels with a refresh in flight. `cancelCaptures` bumps the
@@ -34,6 +34,14 @@ final class GlobalSearchPanelCaptureManager {
     private struct AgentSessionIndexState: Equatable {
         let sessionID: String
         let revision: Int
+        let title: String
+        let location: String
+    }
+
+    struct TerminalIndexState: Equatable {
+        let fingerprint: UInt64
+        let windowID: UUID
+        let workspaceID: UUID
         let title: String
         let location: String
     }
@@ -236,7 +244,7 @@ final class GlobalSearchPanelCaptureManager {
     func cancelCaptures(forPanelID panelID: UUID) {
         cancelBrowserCapture(forPanelID: panelID)
         cancelMarkdownCapture(forPanelID: panelID)
-        terminalCaptureFingerprints[panelID] = nil
+        terminalIndexStates[panelID] = nil
         agentSessionIndexStates[panelID] = nil
         terminalRefreshEpochs[panelID]?.generation += 1
     }
@@ -297,10 +305,17 @@ final class GlobalSearchPanelCaptureManager {
             return (text: text, fingerprint: GlobalSearchTerminalText.fingerprint(text))
         }.value
         guard isCurrentTerminalRefresh(panelID, generation: generation) else { return }
-        guard terminalCaptureFingerprints[panelID] != prepared.fingerprint else { return }
+        let next = TerminalIndexState(
+            fingerprint: prepared.fingerprint,
+            windowID: context.windowID,
+            workspaceID: context.workspaceID,
+            title: context.panelTitle,
+            location: context.location
+        )
+        guard terminalIndexStates[panelID] != next else { return }
 
         guard let document = GlobalSearchDocuments.terminalDocument(for: context, text: prepared.text) else {
-            terminalCaptureFingerprints[panelID] = nil
+            terminalIndexStates[panelID] = nil
             await purgeTerminalDocument(forPanelID: panelID, index: index)
             return
         }
@@ -308,7 +323,7 @@ final class GlobalSearchPanelCaptureManager {
         do {
             try await index.upsert(document)
             guard isCurrentTerminalRefresh(panelID, generation: generation) else { return }
-            terminalCaptureFingerprints[panelID] = prepared.fingerprint
+            terminalIndexStates[panelID] = next
         } catch {
 #if DEBUG
             cmuxDebugLog("globalSearch.terminal.upsert failed panel=\(panelID.uuidString.prefix(5)) error=\(error.localizedDescription)")
@@ -350,7 +365,7 @@ final class GlobalSearchPanelCaptureManager {
         guard next != previous else {
             // An overlapping refresh that fell back to the scrollback can
             // index it after this session's document landed.
-            if terminalCaptureFingerprints.removeValue(forKey: panelID) != nil {
+            if terminalIndexStates.removeValue(forKey: panelID) != nil {
                 await purgeTerminalDocument(forPanelID: panelID, index: index)
             }
             return true
@@ -384,7 +399,7 @@ final class GlobalSearchPanelCaptureManager {
 #endif
             return false
         }
-        if terminalCaptureFingerprints.removeValue(forKey: panelID) != nil || previous == nil {
+        if terminalIndexStates.removeValue(forKey: panelID) != nil || previous == nil {
             await purgeTerminalDocument(forPanelID: panelID, index: index)
         }
         return true
